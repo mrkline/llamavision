@@ -1,117 +1,63 @@
-use anyhow::Result;
-use pipewire as pw;
-use pw::spa;
+use anyhow::{anyhow, Result};
+use sdl2 as sdl;
 
-#[derive(Default)]
-struct UserData {
-    format: spa::param::audio::AudioInfoRaw,
-}
+mod pipewire;
 
 fn main() -> Result<()> {
-    println!("Hello, world!");
-    let mainloop = pw::main_loop::MainLoop::new(None)?;
-    let context = pw::context::Context::new(&mainloop)?;
-    let core = context.connect(None)?;
+    let context = sdl::init().map_err(|e| anyhow!(e))?;
+    let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
+    let vidya = context.video().map_err(|e| anyhow!(e))?;
 
-    let props = pipewire::properties::properties! {
-        *pw::keys::MEDIA_TYPE => "Audio",
-        *pw::keys::MEDIA_CATEGORY => "Capture",
-        *pw::keys::MEDIA_ROLE => "Music",
-        *pw::keys::STREAM_CAPTURE_SINK => "true" // configurable source as arg?
-    };
+    let w = 1024;
+    let h = 600;
 
-    let stream = pw::stream::Stream::new(&core, "llama", props)?;
+    let mut canvas = vidya
+        .window("llamavision", w, h)
+        .resizable()
+        .build()?
+        .into_canvas()
+        .accelerated()
+        .present_vsync()
+        .build()?;
 
-    let data = UserData::default();
+    let tc = canvas.texture_creator();
+    let mut tex = tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h)?;
 
-    let _listener = stream
-        .add_local_listener_with_user_data(data)
-        .param_changed(|_, user_data, id, param| {
-            // NULL means to clear the format
-            let Some(param) = param else {
-                return;
-            };
-            if id != pw::spa::param::ParamType::Format.as_raw() {
-                return;
+    let mut pixels: Vec<u8> = Vec::with_capacity((w * h * 3) as usize);
+    let mut i = 0;
+
+    println!("{:?}", tex.query());
+    println!("{:?}", tex.color_mod());
+    println!("{:?}", tex.alpha_mod());
+
+    'renderloop: loop {
+        i += 20;
+        pixels.clear();
+        for y in 0..h {
+            let ynorm = (y + i) as f64 / h as f64;
+            let v = (f64::cos(ynorm) * 127.0 + 127.0) as u8;
+            // println!("{v}");
+            for x in 0..w {
+                pixels.push(0);
+                pixels.push(0);
+                pixels.push(v);
             }
-
-            let (media_type, media_subtype) = match spa::param::format_utils::parse_format(param) {
-                Ok(v) => v,
-                Err(_) => return,
-            };
-
-            if media_type != spa::param::format::MediaType::Audio
-                || media_subtype != spa::param::format::MediaSubtype::Raw
-            {
-                return;
+        }
+        canvas.clear();
+        for event in event_pump.poll_iter() {
+            use sdl::event::Event;
+            match event {
+                Event::Quit { .. }
+                | Event::KeyDown {
+                    keycode: Some(sdl::keyboard::Keycode::Escape),
+                    ..
+                } => break 'renderloop,
+                _ => {}
             }
-
-            user_data
-                .format
-                .parse(param)
-                .expect("Failed to parse param changed to AudioInfoRaw");
-
-            println!(
-                "capturing fmt: {:?}, rate:{} channels:{}",
-                user_data.format.format(),
-                user_data.format.rate(),
-                user_data.format.channels()
-            );
-        })
-        .process(|stream, user_data| match stream.dequeue_buffer() {
-            None => println!("out of buffers"),
-            Some(mut buffer) => {
-                let datas = buffer.datas_mut();
-                if datas.is_empty() {
-                    return;
-                }
-
-                let data = &mut datas[0];
-                let n_channels = user_data.format.channels();
-                let n_samples = data.chunk().size() / (std::mem::size_of::<f32>() as u32);
-
-                if let Some(samples) = data.data() {
-                    let samps = n_samples / n_channels;
-                    println!("captured {} samples", samps);
-                }
-            }
-        })
-        .register()?;
-
-    let mut audio_info = spa::param::audio::AudioInfoRaw::new();
-    audio_info.set_format(spa::param::audio::AudioFormat::F32LE);
-    audio_info.set_rate(44100);
-    // Downmix to mono please.
-    audio_info.set_channels(1);
-    let mut position = [0; spa::param::audio::MAX_CHANNELS];
-    position[0] = spa::sys::SPA_AUDIO_CHANNEL_MONO;
-    audio_info.set_position(position);
-    // Dear god pipewire has its own ABI. Cargo culted from pipewire-rs examples:
-    let values: Vec<u8> = spa::pod::serialize::PodSerializer::serialize(
-        std::io::Cursor::new(Vec::new()),
-        // Use object! macro instead? But AudioInfoRaw is into Vec<Properties>
-        &spa::pod::Value::Object(spa::pod::Object {
-            type_: spa::sys::SPA_TYPE_OBJECT_Format,
-            id: spa::sys::SPA_PARAM_EnumFormat,
-            properties: audio_info.into(),
-        }),
-    )
-    .unwrap()
-    .0
-    .into_inner();
-
-    let mut params = [spa::pod::Pod::from_bytes(&values).unwrap()];
-
-    stream.connect(
-        spa::utils::Direction::Input,
-        None,
-        pw::stream::StreamFlags::AUTOCONNECT
-            | pw::stream::StreamFlags::MAP_BUFFERS
-            | pw::stream::StreamFlags::RT_PROCESS,
-        &mut params,
-    )?;
-
-    mainloop.run();
-
+        }
+        tex.update(None, &pixels, (w * 3) as usize)?;
+        canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
+        canvas.present();
+    }
     Ok(())
 }
