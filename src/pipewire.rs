@@ -1,13 +1,15 @@
 use anyhow::Result;
 use pipewire as pw;
 use pw::spa;
+use tracing::*;
 
-#[derive(Default)]
+use std::sync::mpsc::{SyncSender, TrySendError};
+
 struct UserData {
-    format: spa::param::audio::AudioInfoRaw,
+    tx: SyncSender<Vec<i16>>,
 }
 
-pub fn pipe_audio() -> Result<()> {
+pub fn run(tx: SyncSender<Vec<i16>>) -> Result<()> {
     println!("Hello, world!");
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let context = pw::context::Context::new(&mainloop)?;
@@ -22,11 +24,11 @@ pub fn pipe_audio() -> Result<()> {
 
     let stream = pw::stream::Stream::new(&core, "llamavision", props)?;
 
-    let data = UserData::default();
+    let data = UserData { tx };
 
     let _listener = stream
         .add_local_listener_with_user_data(data)
-        .param_changed(|_, user_data, id, param| {
+        .param_changed(|_, _user_data, id, param| {
             // NULL means to clear the format
             let Some(param) = param else {
                 return;
@@ -46,17 +48,14 @@ pub fn pipe_audio() -> Result<()> {
                 return;
             }
 
-            user_data
-                .format
+            let mut format = spa::param::audio::AudioInfoRaw::new();
+            format
                 .parse(param)
                 .expect("Failed to parse param changed to AudioInfoRaw");
 
-            println!(
-                "capturing fmt: {:?}, rate:{} channels:{}",
-                user_data.format.format(),
-                user_data.format.rate(),
-                user_data.format.channels()
-            );
+            assert_eq!(format.format(), spa::param::audio::AudioFormat::S16LE);
+            assert_eq!(format.rate(), 44100);
+            assert_eq!(format.channels(), 1);
         })
         .process(|stream, user_data| match stream.dequeue_buffer() {
             None => println!("out of buffers"),
@@ -66,20 +65,44 @@ pub fn pipe_audio() -> Result<()> {
                     return;
                 }
 
+                // Lots-o-cargo cult from the examples, but let's assert some assumptions.
+                assert_eq!(datas.len(), 1); // <= 1 buffer per callback
                 let data = &mut datas[0];
-                let n_channels = user_data.format.channels();
-                let n_samples = data.chunk().size() / (std::mem::size_of::<f32>() as u32);
 
-                if let Some(samples) = data.data() {
-                    let samps = n_samples / n_channels;
-                    println!("captured {} samples", samps);
+                let chunk_size = data.chunk().size() as usize;
+                let chunk_off = data.chunk().offset() as usize;
+                assert_eq!(data.chunk().stride(), 2); // Stride is 2 bytes per sample (s16)
+
+                // Data is some yuge buffer. Pick out the samples specified by the chunk,
+                // starting at its offset.
+                if let Some(d) = data.data() {
+                    let sample_bytes = &d[chunk_off..(chunk_off + chunk_size)];
+                    // Cast to a slice of [i16]. If we haven't fucked up the math,
+                    // we should have 0 bytes before or after.
+                    let (unaligned_pre, samples, unaligned_post): (_, &[i16], _) =
+                        unsafe { sample_bytes.align_to() };
+                    assert_eq!(unaligned_pre.len(), 0);
+                    assert_eq!(unaligned_post.len(), 0);
+                    trace!("captured {} samps", samples.len());
+
+                    let to_send = samples.to_owned();
+                    match user_data.tx.try_send(to_send) {
+                        Ok(()) => (),
+                        Err(TrySendError::Full(s)) => {
+                            warn!("audio queue full; dropping {} samples", s.len())
+                        }
+                        Err(TrySendError::Disconnected(_)) => {
+                            debug!("audio queue hung up; quitting pipewire");
+                            let _ = stream.disconnect();
+                        }
+                    }
                 }
             }
         })
         .register()?;
 
     let mut audio_info = spa::param::audio::AudioInfoRaw::new();
-    audio_info.set_format(spa::param::audio::AudioFormat::F32LE);
+    audio_info.set_format(spa::param::audio::AudioFormat::S16LE);
     audio_info.set_rate(44100);
     // Downmix to mono please.
     audio_info.set_channels(1);

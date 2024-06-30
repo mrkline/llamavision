@@ -1,9 +1,13 @@
 [package]
-name = "llama"
+name = "llamavision"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = { version = "1.0", features = [ "backtrace" ] }
+clap = { version = "4", features = ["derive"] }
+fftw = { version = "0.8.0", default-features = false, features = ["system"] }
 pipewire = "0.8.0"
 sdl2 = { version = "0.37.0", features = [ "gfx" ] }
+tracing = "0.1.40"
+tracing-subscriber = "0.3.18"
