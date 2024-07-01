@@ -3,13 +3,13 @@ use pipewire as pw;
 use pw::spa;
 use tracing::*;
 
-use std::sync::mpsc::{SyncSender, TrySendError};
+use std::sync::{atomic::{AtomicBool, Ordering}, mpsc::{SyncSender, TrySendError}};
 
 struct UserData {
     tx: SyncSender<Vec<i16>>,
 }
 
-pub fn run(tx: SyncSender<Vec<i16>>) -> Result<()> {
+pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let context = pw::context::Context::new(&mainloop)?;
     let core = context.connect(None)?;
@@ -90,7 +90,9 @@ pub fn run(tx: SyncSender<Vec<i16>>) -> Result<()> {
                     match user_data.tx.try_send(to_send) {
                         Ok(()) => (),
                         Err(TrySendError::Full(s)) => {
-                            warn!("audio queue full; dropping {} samples", s.len())
+                            if ready.load(Ordering::Relaxed) {
+                                warn!("audio queue full; dropping {} samples", s.len())
+                            }
                         }
                         Err(TrySendError::Disconnected(_)) => {
                             debug!("audio queue hung up; quitting pipewire");

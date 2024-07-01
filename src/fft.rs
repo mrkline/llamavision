@@ -7,10 +7,11 @@ use fftw::{
 use tracing::*;
 
 use std::collections::VecDeque;
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{atomic::{AtomicBool, Ordering}, mpsc::{Receiver, SyncSender}};
 
 pub fn run(
     width: usize,
+    ready: &AtomicBool,
     audio_rx: Receiver<Vec<i16>>,
     rows_tx: SyncSender<Vec<f32>>,
 ) -> Result<()> {
@@ -25,6 +26,7 @@ pub fn run(
     // of audio buffer lengths.
     let mut normalized_audio = VecDeque::with_capacity(width * 3);
 
+    ready.store(true, Ordering::SeqCst);
     while let Ok(samps) = audio_rx.recv() {
         for s in samps {
             normalized_audio.push_back(s as f32 / i16::MAX as f32);
