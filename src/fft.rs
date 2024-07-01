@@ -4,11 +4,18 @@ use fftw::{
     plan::{R2CPlan, R2CPlan32},
     types::{c32, Flag},
 };
+use tracing::*;
 
-use std::sync::mpsc::Receiver;
+use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, SyncSender};
 
-pub fn run(width: usize, audio_rx: Receiver<Vec<i16>>) -> Result<()> {
+pub fn run(
+    width: usize,
+    audio_rx: Receiver<Vec<i16>>,
+    rows_tx: SyncSender<Vec<f32>>,
+) -> Result<()> {
     let in_width = width * 2;
+    let window = blackman_harris(in_width);
     let mut ins = AlignedVec::<f32>::new(in_width);
     let mut outs = AlignedVec::<c32>::new(width + 1);
     let mut plan = R2CPlan32::new(&[in_width], &mut ins, &mut outs, Flag::MEASURE)
@@ -16,39 +23,65 @@ pub fn run(width: usize, audio_rx: Receiver<Vec<i16>>) -> Result<()> {
 
     // Preallocate a bit more since otherwise we'd resize unless in_width is a direct multiple
     // of audio buffer lengths.
-    let mut normalized_audio: Vec<f32> = Vec::with_capacity(width * 3);
+    let mut normalized_audio = VecDeque::with_capacity(width * 3);
 
     while let Ok(samps) = audio_rx.recv() {
         for s in samps {
-            let normed = s as f64 / i16::MAX as f64;
-            // Guard against s being i16::MIN (yay two's comp)
-            normalized_audio.push(normed.max(-1.0) as f32);
+            normalized_audio.push_back(s as f32 / i16::MAX as f32);
         }
         if normalized_audio.len() >= in_width {
-            let row = fft(&normalized_audio, &mut plan, &mut ins, &mut outs)?;
+            let row = fft(&normalized_audio, &window, &mut plan, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
-            // TODO: send row to UI
-            normalized_audio.clear();
+            if let Err(_) = rows_tx.send(row) {
+                break;
+            }
+            // Shave in_width off
+            normalized_audio.drain(..in_width);
+            trace!("{} samples remain after FFT", normalized_audio.len());
         }
     }
     Ok(())
 }
 
+#[allow(non_snake_case)]
+fn blackman_harris(width: usize) -> Vec<f32> {
+    let a0 = 0.35875;
+    let a1 = 0.48829;
+    let a2 = 0.14128;
+    let a3 = 0.01168;
+    let N = width as f32;
+    use std::f32::consts::PI;
+    let w = |n| {
+        a0 - a1 * f32::cos(2.0 * PI * n / N) + a2 * f32::cos(4.0 * PI * n / N)
+            - a3 * f32::cos(6.0 * PI * n / N)
+    };
+    let mut bh = Vec::with_capacity(width);
+    for n in 0..width {
+        bh.push(w(n as f32));
+    }
+    bh
+}
+
+#[instrument(level = "debug", skip_all)]
 fn fft(
-    normalized_audio: &[f32],
+    normalized_audio: &VecDeque<f32>,
+    window: &[f32],
     plan: &mut R2CPlan32,
     ins: &mut AlignedVec<f32>,
     outs: &mut AlignedVec<c32>,
 ) -> Result<Vec<f32>> {
-    // TODO: WINDOW!
-    let in_len = ins.len();
-    ins.clone_from_slice(&normalized_audio[..in_len]);
+    // Window
+    for (n, i_n) in ins.iter_mut().enumerate() {
+        *i_n = window[n] * normalized_audio[n];
+    }
+
     plan.r2c(ins, outs).context("fft failed")?;
     // Get magnitude and normalize.
-    let normalize_by = in_len as f32; // sqrt this?
+    let normalize_by = ins.len() as f32; // sqrt this?
     let mut normalized = Vec::with_capacity(outs.len() - 1); // Skip DC
     for o in &outs[1..] {
-        normalized.push(o.norm() / normalize_by);
+        let normed = o.norm() / normalize_by;
+        normalized.push(10.0 * f32::log10(normed));
     }
     Ok(normalized)
 }

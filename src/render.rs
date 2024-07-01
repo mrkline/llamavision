@@ -1,13 +1,51 @@
 use anyhow::{anyhow, Result};
 use sdl2 as sdl;
+use tracing::*;
 
-pub fn run(width: usize) -> Result<()> {
+use std::collections::VecDeque;
+use std::sync::mpsc::Receiver;
+
+struct Row {
+    vals: Vec<f32>,
+    min: f32,
+    max: f32,
+}
+
+impl Row {
+    fn new(vals: Vec<f32>) -> Self {
+        let mut min = f32::INFINITY;
+        let mut max = f32::NEG_INFINITY;
+        for v in &vals {
+            min = min.min(*v);
+            max = max.max(*v);
+        }
+        Self { vals, min, max }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+struct GlobalBounds {
+    min: f32,
+    max: f32,
+}
+
+fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
+    let mut min = f32::INFINITY;
+    let mut max = f32::NEG_INFINITY;
+    for r in it {
+        min = min.min(r.min);
+        max = max.max(r.max);
+    }
+    GlobalBounds { min, max }
+}
+
+pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<()> {
     let context = sdl::init().map_err(|e| anyhow!(e))?;
     let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
     let vidya = context.video().map_err(|e| anyhow!(e))?;
 
     let w = width as u32;
-    let h = 600;
+    let h = height as u32;
 
     let mut canvas = vidya
         .window("llamavision", w, h)
@@ -21,22 +59,45 @@ pub fn run(width: usize) -> Result<()> {
     let tc = canvas.texture_creator();
     let mut tex = tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h)?;
 
-    let mut pixels: Vec<u8> = Vec::with_capacity((w * h * 3) as usize);
-    let mut i = 0;
+    let mut rows = VecDeque::with_capacity(height);
+    let mut bounds = None;
 
-    'renderloop: loop {
-        i += 20;
-        pixels.clear();
-        for y in 0..h {
-            let ynorm = (y + i) as f64 / h as f64;
-            let v = (f64::cos(ynorm * std::f64::consts::PI) * 127.0 + 127.0) as u8;
-            // println!("{v}");
-            for _x in 0..w {
-                pixels.push(0);
-                pixels.push(v);
-                pixels.push(0);
-            }
+    'renderloop: while let Ok(new_row) = rows_rx.recv() {
+        assert!(rows.len() <= height);
+        if rows.len() == height {
+            rows.pop_back();
         }
+        rows.push_front(Row::new(new_row));
+
+        // Check dB bounds and possibly recolorize
+        let new_bounds = global_bounds(rows.iter());
+        if bounds != Some(new_bounds) {
+            debug!(
+                "Redrawing all; new range [{}, {}]",
+                new_bounds.min, new_bounds.max
+            );
+            // TODO: Redraw everything
+            bounds = Some(new_bounds);
+        } else {
+            // TODO: Incremental refresh
+        }
+
+        let b = bounds.unwrap();
+
+        // For now redraw everything
+        tex.with_lock(None, |pixels, pitch| {
+            for (y, _row) in rows.iter().enumerate() {
+                let row = &rows[0];
+                for x in 0..width {
+                    let Pixel { r, g, b } = colorize(normalize(&b, row.vals[x]));
+                    let pixbase = y * pitch + x * 3;
+                    pixels[pixbase] = r;
+                    pixels[pixbase + 1] = g;
+                    pixels[pixbase + 2] = b;
+                }
+            }
+        })
+        .map_err(|e| anyhow!(e))?;
         canvas.clear();
         for event in event_pump.poll_iter() {
             use sdl::event::Event;
@@ -49,9 +110,34 @@ pub fn run(width: usize) -> Result<()> {
                 _ => {}
             }
         }
-        tex.update(None, &pixels, (w * 3) as usize)?;
         canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
         canvas.present();
     }
     Ok(())
+}
+
+struct Pixel {
+    r: u8,
+    g: u8,
+    b: u8,
+}
+
+fn normalize(bounds: &GlobalBounds, v: f32) -> f32 {
+    let min = bounds.min.max(-100.0);
+    if v <= min {
+        0.0
+    } else {
+        assert!(bounds.max > f32::NEG_INFINITY);
+        let range = bounds.max - min;
+        (v - min) / range
+    }
+}
+
+fn colorize(v: f32) -> Pixel {
+    assert!(v >= 0.0 && v <= 1.0, "not normal: {v}");
+    Pixel {
+        r: 0,
+        g: (v * 256.0) as u8,
+        b: 0,
+    }
 }

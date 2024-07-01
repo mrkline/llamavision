@@ -19,7 +19,9 @@ pub fn run(tx: SyncSender<Vec<i16>>) -> Result<()> {
         *pw::keys::MEDIA_TYPE => "Audio",
         *pw::keys::MEDIA_CATEGORY => "Capture",
         *pw::keys::MEDIA_ROLE => "Music",
-        *pw::keys::STREAM_CAPTURE_SINK => "true" // configurable source as arg?
+        *pw::keys::STREAM_CAPTURE_SINK => "true", // configurable source as arg?
+        *pw::keys::NODE_ALWAYS_PROCESS => "true",
+        *pw::keys::NODE_LATENCY => "512/44100",
     };
 
     let stream = pw::stream::Stream::new(&core, "llamavision", props)?;

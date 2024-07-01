@@ -25,7 +25,10 @@ fn main() {
         2 => Level::DEBUG,
         _ => Level::TRACE,
     };
-    tracing_subscriber::fmt().with_max_level(level).init();
+    tracing_subscriber::fmt()
+        .with_max_level(level)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
+        .init();
     if let Err(e) = run(args) {
         error!("{e:?}");
         std::process::exit(1);
@@ -36,10 +39,13 @@ fn run(args: Args) -> Result<()> {
     let width = args.width.unwrap_or(512);
 
     let (err_tx, err_rx) = channel();
-    let (audio_tx, audio_rx) = sync_channel(0);
-    fanout(&err_tx, "fft", move || fft::run(width, audio_rx));
+    let (audio_tx, audio_rx) = sync_channel(8);
+    let (rows_tx, rows_rx) = sync_channel(0);
+    fanout(&err_tx, "fft", move || fft::run(width, audio_rx, rows_tx));
     fanout(&err_tx, "pipewire", move || pipewire::run(audio_tx));
-    fanout(&err_tx, "SDL render", move || render::run(width));
+    fanout(&err_tx, "SDL render", move || {
+        render::run(width, 1024, rows_rx)
+    });
     drop(err_tx);
 
     // Return whatever the first guy does.
