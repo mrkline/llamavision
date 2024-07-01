@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use tracing::*;
 
@@ -63,5 +63,11 @@ where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
     let s2 = s.clone();
-    std::thread::spawn(move || s2.send(f().with_context(|| format!("{name} thread failed"))));
+    std::thread::spawn(move || {
+        let s3 = s2.clone();
+        std::panic::set_hook(Box::new(move |p| {
+            s3.send(Err(anyhow!("{name} thread panicked: {p}"))).unwrap();
+        }));
+        s2.send(f().with_context(|| format!("{name} thread failed"))).unwrap();
+    });
 }
