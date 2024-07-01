@@ -38,7 +38,7 @@ pub fn run(
                 break;
             }
             // Shave in_width off
-            normalized_audio.drain(..in_width);
+            normalized_audio.drain(..(in_width / 2)); // 50% FFT overlap
         }
     }
     Ok(())
