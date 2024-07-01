@@ -15,6 +15,9 @@ struct Args {
 
     #[clap(short, long)]
     width: Option<usize>,
+
+    #[clap(short, long)]
+    height: Option<usize>,
 }
 
 fn main() {
@@ -37,14 +40,15 @@ fn main() {
 
 fn run(args: Args) -> Result<()> {
     let width = args.width.unwrap_or(512);
+    let height = args.height.unwrap_or(512);
 
     let (err_tx, err_rx) = channel();
-    let (audio_tx, audio_rx) = sync_channel(8);
+    let (audio_tx, audio_rx) = sync_channel(0);
     let (rows_tx, rows_rx) = sync_channel(0);
     fanout(&err_tx, "fft", move || fft::run(width, audio_rx, rows_tx));
     fanout(&err_tx, "pipewire", move || pipewire::run(audio_tx));
     fanout(&err_tx, "SDL render", move || {
-        render::run(width, 1024, rows_rx)
+        render::run(width, height, rows_rx)
     });
     drop(err_tx);
 

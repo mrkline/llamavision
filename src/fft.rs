@@ -18,7 +18,7 @@ pub fn run(
     let window = blackman_harris(in_width);
     let mut ins = AlignedVec::<f32>::new(in_width);
     let mut outs = AlignedVec::<c32>::new(width + 1);
-    let mut plan = R2CPlan32::new(&[in_width], &mut ins, &mut outs, Flag::MEASURE)
+    let mut plan = R2CPlan32::new(&[in_width], &mut ins, &mut outs, Flag::PATIENT)
         .context("fftw plan failed")?;
 
     // Preallocate a bit more since otherwise we'd resize unless in_width is a direct multiple
@@ -29,7 +29,7 @@ pub fn run(
         for s in samps {
             normalized_audio.push_back(s as f32 / i16::MAX as f32);
         }
-        if normalized_audio.len() >= in_width {
+        while normalized_audio.len() >= in_width {
             let row = fft(&normalized_audio, &window, &mut plan, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
             if let Err(_) = rows_tx.send(row) {
@@ -37,7 +37,6 @@ pub fn run(
             }
             // Shave in_width off
             normalized_audio.drain(..in_width);
-            trace!("{} samples remain after FFT", normalized_audio.len());
         }
     }
     Ok(())
