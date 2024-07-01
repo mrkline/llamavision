@@ -62,6 +62,8 @@ pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<(
     let mut tex = tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h)?;
 
     let mut rows = VecDeque::with_capacity(height);
+    let area = height * width;
+    let mut pixels = VecDeque::with_capacity(area);
     let mut bounds = None;
 
     'renderloop: while let Ok(new_row) = rows_rx.recv() {
@@ -74,28 +76,45 @@ pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<(
         // Check dB bounds and possibly recolorize
         let new_bounds = global_bounds(rows.iter());
         if bounds != Some(new_bounds) {
-            debug!(
-                "Redrawing all; new range [{}, {}]",
+            info!(
+                "Redrawing all; new range [{:.2} dB, {:.2} dB]",
                 new_bounds.min, new_bounds.max
             );
-            // TODO: Redraw everything
             bounds = Some(new_bounds);
+            pixels.clear();
+            for row in rows.iter() {
+                for x in 0..width {
+                    let rgb = colorize(normalize(&new_bounds, row.vals[x]));
+                    pixels.push_back(rgb);
+                }
+            }
         } else {
-            // TODO: Incremental refresh
+            let to_drop = if pixels.len() >= area {
+                width
+            } else {
+                0
+            };
+            for _ in 0..to_drop {
+                pixels.pop_back();
+            }
+
+
+            let first_row = rows.front().unwrap();
+            for x in (0..width).rev() {
+                let rgb = colorize(normalize(&bounds.unwrap(), first_row.vals[x]));
+                pixels.push_front(rgb);
+            }
         }
 
-        let b = bounds.unwrap();
 
         // For now redraw everything
-        tex.with_lock(None, |pixels, pitch| {
-            for (y, row) in rows.iter().enumerate() {
-                for x in 0..width {
-                    let RGB { r, g, b } = colorize(normalize(&b, row.vals[x]));
-                    let pixbase = y * pitch + x * 3;
-                    pixels[pixbase] = r;
-                    pixels[pixbase + 1] = g;
-                    pixels[pixbase + 2] = b;
-                }
+        tex.with_lock(None, |tex, pitch| {
+            assert_eq!(width * 3, pitch);
+            for (i, p) in pixels.iter().enumerate() {
+                let off = i * 3;
+                tex[off] = p.r;
+                tex[off + 1] = p.g;
+                tex[off + 2] = p.b;
             }
         })
         .map_err(|e| anyhow!(e))?;

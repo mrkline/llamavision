@@ -10,7 +10,6 @@ struct UserData {
 }
 
 pub fn run(tx: SyncSender<Vec<i16>>) -> Result<()> {
-    println!("Hello, world!");
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let context = pw::context::Context::new(&mainloop)?;
     let core = context.connect(None)?;
