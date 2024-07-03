@@ -7,6 +7,8 @@ use tracing::*;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 
+use super::SAMPLE_RATE;
+
 struct Row {
     vals: Vec<f32>,
     min: f32,
@@ -41,12 +43,22 @@ fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
     GlobalBounds { min, max }
 }
 
-pub fn run(width: usize, height: usize, upper: usize, rows_rx: Receiver<Vec<f32>>) -> Result<()> {
+pub fn run(
+    width: usize,
+    height: usize,
+    mut upper: usize,
+    rows_rx: Receiver<Vec<f32>>,
+) -> Result<()> {
     let context = sdl::init().map_err(|e| anyhow!(e))?;
     let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
     let vidya = context.video().map_err(|e| anyhow!(e))?;
 
-    let rbw = (44100 / 2) as f64 / width as f64;
+    let nyquist = SAMPLE_RATE / 2;
+    if upper > nyquist {
+        warn!("Limiting upper frequency to Nyquist rate ({nyquist} Hz)");
+        upper = nyquist;
+    }
+    let rbw = nyquist as f64 / width as f64;
     let dft_width = width;
     let width = (upper as f64 / rbw) as usize;
     info!("DFT width {dft_width}, RBW: {rbw:.0} Hz, {width} bins to {upper:.0} Hz");

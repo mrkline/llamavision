@@ -11,6 +11,8 @@ mod fft;
 mod pipewire;
 mod render;
 
+pub const SAMPLE_RATE: usize = 44100;
+
 #[derive(Parser)]
 struct Args {
     #[clap(short, long, action(clap::ArgAction::Count))]
@@ -50,7 +52,12 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<()> {
-    let Args {width, height, upper, .. } = args;
+    let Args {
+        width,
+        height,
+        upper,
+        ..
+    } = args;
 
     let (err_tx, err_rx) = channel();
     let (audio_tx, audio_rx) = sync_channel(8);
