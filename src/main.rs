@@ -27,7 +27,7 @@ struct Args {
     height: usize,
 
     /// Upper frequency to display
-    #[clap(short, long, default_value_t = 18000)]
+    #[clap(short, long, default_value_t = 20000)]
     upper: usize,
 }
 
