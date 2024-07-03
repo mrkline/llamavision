@@ -61,7 +61,7 @@ fn run(args: Args) -> Result<()> {
 
     let (err_tx, err_rx) = channel();
     let (audio_tx, audio_rx) = sync_channel(8);
-    let (rows_tx, rows_rx) = sync_channel(0);
+    let (rows_tx, rows_rx) = sync_channel(8);
     fanout(&err_tx, "fft", move || {
         fft::run(width, &FFTW_READY, audio_rx, rows_tx)
     });
