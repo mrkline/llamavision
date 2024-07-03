@@ -41,10 +41,15 @@ fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
     GlobalBounds { min, max }
 }
 
-pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<()> {
+pub fn run(width: usize, height: usize, upper: usize, rows_rx: Receiver<Vec<f32>>) -> Result<()> {
     let context = sdl::init().map_err(|e| anyhow!(e))?;
     let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
     let vidya = context.video().map_err(|e| anyhow!(e))?;
+
+    let rbw = (44100 / 2) as f64 / width as f64;
+    let dft_width = width;
+    let width = (upper as f64 / rbw) as usize;
+    info!("DFT width {dft_width}, RBW: {rbw:.0} Hz, {width} bins to {upper:.0} Hz");
 
     let w = width as u32;
     let h = height as u32;
@@ -101,12 +106,12 @@ pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<(
             }
         }
 
-
         // For now redraw everything
         tex.with_lock(None, |tex, pitch| {
-            assert_eq!(width * 3, pitch);
             for (i, p) in pixels.iter().enumerate() {
-                let off = i * 3;
+                let y = i / width;
+                let x = i % width;
+                let off = pitch * y + x * 3;
                 tex[off] = p.r;
                 tex[off + 1] = p.g;
                 tex[off + 2] = p.b;

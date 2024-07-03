@@ -16,11 +16,17 @@ struct Args {
     #[clap(short, long, action(clap::ArgAction::Count))]
     verbose: u8,
 
-    #[clap(short, long)]
-    width: Option<usize>,
+    /// DFT width
+    #[clap(short, long, default_value_t = 2048)]
+    width: usize,
 
-    #[clap(short, long)]
-    height: Option<usize>,
+    /// History length
+    #[clap(long, default_value_t = 1024)]
+    height: usize,
+
+    /// Upper frequency to display
+    #[clap(short, long, default_value_t = 18000)]
+    upper: usize,
 }
 
 static FFTW_READY: AtomicBool = AtomicBool::new(false);
@@ -44,8 +50,7 @@ fn main() {
 }
 
 fn run(args: Args) -> Result<()> {
-    let width = args.width.unwrap_or(512);
-    let height = args.height.unwrap_or(512);
+    let Args {width, height, upper, .. } = args;
 
     let (err_tx, err_rx) = channel();
     let (audio_tx, audio_rx) = sync_channel(8);
@@ -57,7 +62,7 @@ fn run(args: Args) -> Result<()> {
         pipewire::run(&FFTW_READY, audio_tx)
     });
     fanout(&err_tx, "SDL render", move || {
-        render::run(width, height, rows_rx)
+        render::run(width, height, upper, rows_rx)
     });
     drop(err_tx);
 
