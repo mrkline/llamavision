@@ -7,7 +7,10 @@ use fftw::{
 use tracing::*;
 
 use std::collections::VecDeque;
-use std::sync::{atomic::{AtomicBool, Ordering}, mpsc::{Receiver, SyncSender}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{Receiver, SyncSender},
+};
 
 pub fn run(
     width: usize,

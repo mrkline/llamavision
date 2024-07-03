@@ -89,15 +89,10 @@ pub fn run(width: usize, height: usize, rows_rx: Receiver<Vec<f32>>) -> Result<(
                 }
             }
         } else {
-            let to_drop = if pixels.len() >= area {
-                width
-            } else {
-                0
-            };
+            let to_drop = if pixels.len() >= area { width } else { 0 };
             for _ in 0..to_drop {
                 pixels.pop_back();
             }
-
 
             let first_row = rows.front().unwrap();
             for x in (0..width).rev() {

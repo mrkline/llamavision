@@ -3,7 +3,10 @@ use pipewire as pw;
 use pw::spa;
 use tracing::*;
 
-use std::sync::{atomic::{AtomicBool, Ordering}, mpsc::{SyncSender, TrySendError}};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::{SyncSender, TrySendError},
+};
 
 struct UserData {
     tx: SyncSender<Vec<i16>>,

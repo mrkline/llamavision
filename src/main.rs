@@ -2,7 +2,10 @@ use anyhow::{anyhow, Context, Result};
 use clap::Parser;
 use tracing::*;
 
-use std::sync::{atomic::AtomicBool, mpsc::{channel, sync_channel, Sender}};
+use std::sync::{
+    atomic::AtomicBool,
+    mpsc::{channel, sync_channel, Sender},
+};
 
 mod fft;
 mod pipewire;
@@ -47,8 +50,12 @@ fn run(args: Args) -> Result<()> {
     let (err_tx, err_rx) = channel();
     let (audio_tx, audio_rx) = sync_channel(8);
     let (rows_tx, rows_rx) = sync_channel(0);
-    fanout(&err_tx, "fft", move || fft::run(width, &FFTW_READY, audio_rx, rows_tx));
-    fanout(&err_tx, "pipewire", move || pipewire::run(&FFTW_READY, audio_tx));
+    fanout(&err_tx, "fft", move || {
+        fft::run(width, &FFTW_READY, audio_rx, rows_tx)
+    });
+    fanout(&err_tx, "pipewire", move || {
+        pipewire::run(&FFTW_READY, audio_tx)
+    });
     fanout(&err_tx, "SDL render", move || {
         render::run(width, height, rows_rx)
     });
@@ -66,8 +73,10 @@ where
     std::thread::spawn(move || {
         let s3 = s2.clone();
         std::panic::set_hook(Box::new(move |p| {
-            s3.send(Err(anyhow!("{name} thread panicked: {p}"))).unwrap();
+            s3.send(Err(anyhow!("{name} thread panicked: {p}")))
+                .unwrap();
         }));
-        s2.send(f().with_context(|| format!("{name} thread failed"))).unwrap();
+        s2.send(f().with_context(|| format!("{name} thread failed")))
+            .unwrap();
     });
 }
