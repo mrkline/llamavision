@@ -3,6 +3,7 @@ use lerp::Lerp;
 use sdl2 as sdl;
 use tracing::*;
 
+use core::f32;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::sync::LazyLock;
@@ -43,10 +44,26 @@ fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
     GlobalBounds { min, max }
 }
 
+// https://en.wikipedia.org/wiki/Mel_scale
+fn to_mels(hz: f32) -> f32 {
+    1127.0 * f32::ln(1.0 + hz / 700.0)
+}
+
+fn from_mels(m: f32) -> f32 {
+    700.0 * (f32::consts::E.powf(m / 1127.0) - 1.0)
+}
+
+/// Crap we don't want to recalculate each pixel about Hz -> Mels
+struct MelInfo {
+    mels_per_pixel: f32,
+    rbw: f32,
+}
+
 pub fn run(
     width: usize,
     height: usize,
     mut upper: usize,
+    mels: bool,
     rows_rx: Receiver<Vec<f32>>,
 ) -> Result<()> {
     let context = sdl::init().map_err(|e| anyhow!(e))?;
@@ -69,7 +86,24 @@ pub fn run(
     let rbw = nyquist as f64 / width as f64;
     let dft_width = width;
     let width = (upper as f64 / rbw) as usize;
-    info!("DFT width {dft_width}, RBW: {rbw:.0} Hz, {width} bins to {upper:.0} Hz");
+    let upper_mel = to_mels(upper as f32);
+    let mels_per_pixel = upper_mel / width as f32;
+    {
+        let mm = if mels {
+            format!(" ({:.0} mels)", upper_mel)
+        } else {
+            String::new()
+        };
+        info!("DFT width {dft_width}, RBW: {rbw:.0} Hz, {width} bins to {upper:.0} Hz{mm}");
+    }
+    let mel_info = if mels {
+        Some(MelInfo {
+            mels_per_pixel,
+            rbw: rbw as f32,
+        })
+    } else {
+        None
+    };
 
     let w = width as u32;
     let h = height as u32;
@@ -109,7 +143,8 @@ pub fn run(
             pixels.clear();
             for row in rows.iter() {
                 for x in 0..width {
-                    let rgb = colorize(normalize(&new_bounds, row.vals[x]));
+                    let s = sample(&row.vals, x, &mel_info);
+                    let rgb = colorize(normalize(&new_bounds, s));
                     pixels.push_back(rgb);
                 }
             }
@@ -121,7 +156,8 @@ pub fn run(
 
             let first_row = rows.front().unwrap();
             for x in (0..width).rev() {
-                let rgb = colorize(normalize(&bounds.unwrap(), first_row.vals[x]));
+                let s = sample(&first_row.vals, x, &mel_info);
+                let rgb = colorize(normalize(&bounds.unwrap(), s));
                 pixels.push_front(rgb);
             }
         }
@@ -156,11 +192,58 @@ pub fn run(
     Ok(())
 }
 
-#[repr(packed(1))]
-struct RGB {
-    r: u8,
-    g: u8,
-    b: u8,
+fn sample(row: &[f32], x: usize, mel_info: &Option<MelInfo>) -> f32 {
+    match mel_info {
+        None => row[x],
+        Some(mi) => {
+            let xf = x as f32;
+            // We want each pixel to be a fixed number of mels,
+            // but that makes the frequency range in Hz vary logarithmically.
+            // (That's the whole point!)
+            //
+            // Get the bounds of what we need to sample, first in Hertz,
+            let lower_hz = from_mels(mi.mels_per_pixel * xf);
+            let upper_hz = from_mels(mi.mels_per_pixel * (xf + 1.0));
+            // Then using our resolution bandwidth, in samples
+            let low_sample = lower_hz / mi.rbw;
+            let high_sample = upper_hz / mi.rbw;
+            // Consider all the samples we need.
+            let floor = low_sample.floor();
+            let ceil = high_sample.ceil();
+            // println!("{x}: [{lower_hz}Hz, {upper_hz}Hz] -> [{low_sample}, {high_sample}]");
+            if ceil - floor == 1.0 {
+                // Just one sample
+                let of = floor as usize;
+                // println!("    Just {of}");
+                return row[of];
+            }
+            let mut acc = 0f32;
+            if floor < low_sample {
+                // The bottom fraction of our window
+                let frac = 1.0 - (low_sample - floor);
+                let of = floor as usize;
+                // println!("    {:.0}% of {}", frac * 100.0, of);
+                acc += frac * row[of];
+            }
+            // The whole samples of our window
+            let low_whole = low_sample.ceil() as usize;
+            let high_whole = high_sample.floor() as usize - 1;
+            if high_whole >= low_whole {
+                for of in low_whole..=high_whole {
+                    // println!("    all of {of}");
+                    acc += row[of];
+                }
+            }
+            if ceil > high_sample {
+                // The upper fraciton of our window
+                let frac = 1.0 - (ceil - high_sample);
+                let of = ceil as usize - 1;
+                // println!("    {:.0}% of {}", frac * 100.0, of);
+                acc += frac * row[of];
+            }
+            acc / (high_sample - low_sample)
+        }
+    }
 }
 
 fn normalize(bounds: &GlobalBounds, v: f32) -> f32 {
@@ -172,6 +255,13 @@ fn normalize(bounds: &GlobalBounds, v: f32) -> f32 {
         let range = bounds.max - min;
         (v - min) / range
     }
+}
+
+#[repr(packed(1))]
+struct RGB {
+    r: u8,
+    g: u8,
+    b: u8,
 }
 
 fn colorize(v: f32) -> RGB {

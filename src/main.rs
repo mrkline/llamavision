@@ -29,6 +29,10 @@ struct Args {
     /// Upper frequency to display
     #[clap(short, long, default_value_t = 20000)]
     upper: usize,
+
+    // Render in mel scale instead of Hertz
+    #[clap(short, long)]
+    mels: bool,
 }
 
 static FFTW_READY: AtomicBool = AtomicBool::new(false);
@@ -56,6 +60,7 @@ fn run(args: Args) -> Result<()> {
         width,
         height,
         upper,
+        mels,
         ..
     } = args;
 
@@ -69,7 +74,7 @@ fn run(args: Args) -> Result<()> {
         pipewire::run(&FFTW_READY, audio_tx)
     });
     fanout(&err_tx, "SDL render", move || {
-        render::run(width, height, upper, rows_rx)
+        render::run(width, height, upper, mels, rows_rx)
     });
     drop(err_tx);
 
