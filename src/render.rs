@@ -105,7 +105,10 @@ pub fn run(
                     pixels.push_back(rgb);
                 }
             }
-        } else {
+        }
+        // If we don't a new dB range, we we don't have to recolorize the whole screen.
+        // We just have to colorize a single row, and possibly shave the oldest one off.
+        else {
             pixels.truncate(area - width);
 
             let first_row = rows.front().unwrap();
@@ -115,7 +118,7 @@ pub fn run(
             }
         }
 
-        // For now redraw everything
+        // For now redraw everything to the texture.
         tex.with_lock(None, |tex, pitch| {
             for (i, p) in pixels.iter().enumerate() {
                 let y = i / width;
