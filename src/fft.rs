@@ -66,7 +66,7 @@ fn blackman_harris(width: usize) -> Vec<f32> {
     bh
 }
 
-#[instrument(level = "debug", skip_all)]
+#[instrument(level = "trace", skip_all)]
 fn fft(
     normalized_audio: &VecDeque<f32>,
     window: &[f32],

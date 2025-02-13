@@ -25,7 +25,7 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
         *pw::keys::MEDIA_ROLE => "Music",
         *pw::keys::STREAM_CAPTURE_SINK => "true", // configurable source as arg?
         *pw::keys::NODE_ALWAYS_PROCESS => "true",
-        *pw::keys::NODE_LATENCY => format!("512/{SAMPLE_RATE}"),
+        *pw::keys::NODE_LATENCY => format!("2048/{SAMPLE_RATE}"),
     };
 
     let stream = pw::stream::Stream::new(&core, "llamavision", props)?;
@@ -89,7 +89,7 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
                         unsafe { sample_bytes.align_to() };
                     assert_eq!(unaligned_pre.len(), 0);
                     assert_eq!(unaligned_post.len(), 0);
-                    trace!("captured {} samps", samples.len());
+                    trace!("{} samples", samples.len());
 
                     let to_send = samples.to_owned();
                     match user_data.tx.try_send(to_send) {
@@ -100,7 +100,7 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
                             }
                         }
                         Err(TrySendError::Disconnected(_)) => {
-                            debug!("audio queue hung up; quitting pipewire");
+                            error!("audio queue hung up; quitting pipewire");
                             let _ = stream.disconnect();
                         }
                     }

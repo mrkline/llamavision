@@ -1,11 +1,11 @@
 use anyhow::{anyhow, Result};
-use lazy_static::lazy_static;
 use lerp::Lerp;
 use sdl2 as sdl;
 use tracing::*;
 
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
+use std::sync::LazyLock;
 
 use super::SAMPLE_RATE;
 
@@ -93,7 +93,7 @@ pub fn run(
         // Check dB bounds and possibly recolorize
         let new_bounds = global_bounds(rows.iter());
         if bounds != Some(new_bounds) {
-            info!(
+            debug!(
                 "Redrawing all; new range [{:.2} dB, {:.2} dB]",
                 new_bounds.min, new_bounds.max
             );
@@ -197,8 +197,8 @@ fn lerp_pixel(p1: (f32, f32, f32), p2: (f32, f32, f32), t: f32) -> RGB {
     }
 }
 
-lazy_static! {
-    static ref MAGMA: Vec<(f32, f32, f32)> = vec![
+static MAGMA: LazyLock<Vec<(f32, f32, f32)>> = LazyLock::new(|| {
+    vec![
         (0.001462, 0.000466, 0.013866),
         (0.002258, 0.001295, 0.018331),
         (0.003279, 0.002305, 0.023708),
@@ -454,6 +454,6 @@ lazy_static! {
         (0.988033, 0.970012, 0.727077),
         (0.987691, 0.977154, 0.734536),
         (0.987387, 0.984288, 0.742002),
-        (0.987053, 0.991438, 0.749504)
-    ];
-}
+        (0.987053, 0.991438, 0.749504),
+    ]
+});
