@@ -52,6 +52,14 @@ pub fn run(
     let context = sdl::init().map_err(|e| anyhow!(e))?;
     let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
     let vidya = context.video().map_err(|e| anyhow!(e))?;
+    sdl::hint::set(
+        // lol should I just use a string literal?
+        std::ffi::CStr::from_bytes_until_nul(sdl::sys::SDL_HINT_RENDER_SCALE_QUALITY)
+            .unwrap()
+            .to_str()
+            .unwrap(),
+        "best",
+    );
 
     let nyquist = SAMPLE_RATE / 2;
     if upper > nyquist {
