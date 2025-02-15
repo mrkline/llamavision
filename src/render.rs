@@ -172,11 +172,9 @@ pub fn run(
                     let mut y = 0;
                     let mut off = 0;
                     for p in pixels.iter() {
-                        unsafe {
-                            *tex.get_unchecked_mut(off) = p.r;
-                            *tex.get_unchecked_mut(off + 1) = p.g;
-                            *tex.get_unchecked_mut(off + 2) = p.b;
-                        }
+                        tex[off] = p.r;
+                        tex[off + 1] = p.g;
+                        tex[off + 2] = p.b;
                         x += 1;
                         if x >= width {
                             x = 0;
@@ -213,15 +211,15 @@ pub fn run(
 
 unsafe fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
     match mel_samplers {
-        None => *row.get_unchecked(x),
+        None => row[x],
         Some(ms) => {
-            let ms = &ms.get_unchecked(x);
+            let ms = &ms[x];
             let mut acc = 0f32;
             for (i, frac) in ms.partials {
-                acc += row.get_unchecked(i as usize) * frac;
+                acc += row[i as usize] * frac;
             }
             for i in ms.wholes {
-                acc += row.get_unchecked(i as usize);
+                acc += row[i as usize];
             }
             acc / ms.width
         }
@@ -311,14 +309,12 @@ fn colorize(v: f32) -> RGB {
     let scaled = v * 255.0;
     let (whole, frac) = (scaled.trunc(), scaled.fract());
     let idx = whole as usize;
-    unsafe {
-        if frac == 0.0 {
-            tuple_to_pixel(*MAGMA.get_unchecked(idx))
-        } else {
-            let p1 = *MAGMA.get_unchecked(idx);
-            let p2 = *MAGMA.get_unchecked(idx + 1);
-            lerp_pixel(p1, p2, frac)
-        }
+    if frac == 0.0 {
+        tuple_to_pixel(MAGMA[idx])
+    } else {
+        let p1 = MAGMA[idx];
+        let p2 = MAGMA[idx + 1];
+        lerp_pixel(p1, p2, frac)
     }
 }
 
