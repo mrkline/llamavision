@@ -125,69 +125,75 @@ pub fn run(
     let mut pixels = VecDeque::with_capacity(area);
     let mut bounds = None;
 
-    'renderloop: while let Ok(new_row) = rows_rx.recv() {
-        assert!(rows.len() <= height);
-        if rows.len() == height {
-            rows.pop_back();
-        }
-        rows.push_front(Row::new(new_row));
+    while let Ok(new_row) = rows_rx.recv() {
+        let quit = span!(Level::DEBUG, "render").in_scope(|| -> Result<bool> {
+            assert!(rows.len() <= height);
+            if rows.len() == height {
+                rows.pop_back();
+            }
+            rows.push_front(Row::new(new_row));
 
-        // Check dB bounds and possibly recolorize
-        let new_bounds = global_bounds(rows.iter());
-        if bounds != Some(new_bounds) {
-            debug!(
-                "Redrawing all; new range [{:.2} dB, {:.2} dB]",
-                new_bounds.min, new_bounds.max
-            );
-            bounds = Some(new_bounds);
-            pixels.clear();
-            for row in rows.iter() {
-                for x in 0..width {
-                    let s = sample(x, &row.vals, &mel_samplers);
-                    let rgb = colorize(normalize(&new_bounds, s));
-                    pixels.push_back(rgb);
+            // Check dB bounds and possibly recolorize
+            let new_bounds = global_bounds(rows.iter());
+            if bounds != Some(new_bounds) {
+                debug!(
+                    "Redrawing all; new range [{:.2} dB, {:.2} dB]",
+                    new_bounds.min, new_bounds.max
+                );
+                bounds = Some(new_bounds);
+                pixels.clear();
+                for row in rows.iter() {
+                    for x in 0..width {
+                        let s = sample(x, &row.vals, &mel_samplers);
+                        let rgb = colorize(normalize(&new_bounds, s));
+                        pixels.push_back(rgb);
+                    }
                 }
             }
-        }
-        // If we don't a new dB range, we we don't have to recolorize the whole screen.
-        // We just have to colorize a single row, and possibly shave the oldest one off.
-        else {
-            pixels.truncate(area - width);
+            // If we don't a new dB range, we we don't have to recolorize the whole screen.
+            // We just have to colorize a single row, and possibly shave the oldest one off.
+            else {
+                pixels.truncate(area - width);
 
-            let first_row = rows.front().unwrap();
-            for x in (0..width).rev() {
-                let s = sample(x, &first_row.vals, &mel_samplers);
-                let rgb = colorize(normalize(&bounds.unwrap(), s));
-                pixels.push_front(rgb);
+                let first_row = rows.front().unwrap();
+                for x in (0..width).rev() {
+                    let s = sample(x, &first_row.vals, &mel_samplers);
+                    let rgb = colorize(normalize(&bounds.unwrap(), s));
+                    pixels.push_front(rgb);
+                }
             }
-        }
 
-        // For now redraw everything to the texture.
-        tex.with_lock(None, |tex, pitch| {
-            for (i, p) in pixels.iter().enumerate() {
-                let y = i / width;
-                let x = i % width;
-                let off = pitch * y + x * 3;
-                tex[off] = p.r;
-                tex[off + 1] = p.g;
-                tex[off + 2] = p.b;
+            // For now redraw everything to the texture.
+            tex.with_lock(None, |tex, pitch| {
+                for (i, p) in pixels.iter().enumerate() {
+                    let y = i / width;
+                    let x = i % width;
+                    let off = pitch * y + x * 3;
+                    tex[off] = p.r;
+                    tex[off + 1] = p.g;
+                    tex[off + 2] = p.b;
+                }
+            })
+            .map_err(|e| anyhow!(e))?;
+            canvas.clear();
+            for event in event_pump.poll_iter() {
+                use sdl::event::Event;
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::Escape),
+                        ..
+                    } => return Ok(true),
+                    _ => {}
+                }
             }
-        })
-        .map_err(|e| anyhow!(e))?;
-        canvas.clear();
-        for event in event_pump.poll_iter() {
-            use sdl::event::Event;
-            match event {
-                Event::Quit { .. }
-                | Event::KeyDown {
-                    keycode: Some(sdl::keyboard::Keycode::Escape),
-                    ..
-                } => break 'renderloop,
-                _ => {}
-            }
+            canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
+            canvas.present();
+            Ok(false)
+        })?;
+        if quit {
+            break;
         }
-        canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
-        canvas.present();
     }
     Ok(())
 }
