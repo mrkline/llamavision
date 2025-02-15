@@ -145,7 +145,7 @@ pub fn run(
                     pixels.clear();
                     for row in rows.iter() {
                         for x in 0..width {
-                            let s = sample(x, &row.vals, &mel_samplers);
+                            let s = unsafe { sample(x, &row.vals, &mel_samplers) };
                             let rgb = colorize(normalize(&new_bounds, s));
                             pixels.push_back(rgb);
                         }
@@ -158,7 +158,7 @@ pub fn run(
 
                     let first_row = rows.front().unwrap();
                     for x in (0..width).rev() {
-                        let s = sample(x, &first_row.vals, &mel_samplers);
+                        let s = unsafe { sample(x, &first_row.vals, &mel_samplers) };
                         let rgb = colorize(normalize(&bounds.unwrap(), s));
                         pixels.push_front(rgb);
                     }
@@ -211,17 +211,17 @@ pub fn run(
     Ok(())
 }
 
-fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
+unsafe fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
     match mel_samplers {
-        None => row[x],
+        None => *row.get_unchecked(x),
         Some(ms) => {
-            let ms = &ms[x];
+            let ms = &ms.get_unchecked(x);
             let mut acc = 0f32;
             for (i, frac) in ms.partials {
-                acc += row[i as usize] * frac;
+                acc += row.get_unchecked(i as usize) * frac;
             }
             for i in ms.wholes {
-                acc += row[i as usize];
+                acc += row.get_unchecked(i as usize);
             }
             acc / ms.width
         }
@@ -311,12 +311,14 @@ fn colorize(v: f32) -> RGB {
     let scaled = v * 255.0;
     let (whole, frac) = (scaled.trunc(), scaled.fract());
     let idx = whole as usize;
-    if frac == 0.0 {
-        tuple_to_pixel(MAGMA[idx])
-    } else {
-        let p1 = MAGMA[idx];
-        let p2 = MAGMA[idx + 1];
-        lerp_pixel(p1, p2, frac)
+    unsafe {
+        if frac == 0.0 {
+            tuple_to_pixel(*MAGMA.get_unchecked(idx))
+        } else {
+            let p1 = *MAGMA.get_unchecked(idx);
+            let p2 = *MAGMA.get_unchecked(idx + 1);
+            lerp_pixel(p1, p2, frac)
+        }
     }
 }
 
