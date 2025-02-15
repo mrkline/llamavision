@@ -168,13 +168,23 @@ pub fn run(
             // For now redraw everything to the texture.
             span!(Level::DEBUG, "blit").in_scope(|| -> Result<()> {
                 tex.with_lock(None, |tex, pitch| {
-                    for (i, p) in pixels.iter().enumerate() {
-                        let y = i / width;
-                        let x = i % width;
-                        let off = pitch * y + x * 3;
-                        tex[off] = p.r;
-                        tex[off + 1] = p.g;
-                        tex[off + 2] = p.b;
+                    let mut x = 0;
+                    let mut y = 0;
+                    let mut off = 0;
+                    for p in pixels.iter() {
+                        unsafe {
+                            *tex.get_unchecked_mut(off) = p.r;
+                            *tex.get_unchecked_mut(off + 1) = p.g;
+                            *tex.get_unchecked_mut(off + 2) = p.b;
+                        }
+                        x += 1;
+                        if x >= width {
+                            x = 0;
+                            y += 1;
+                            off = pitch * y;
+                        } else {
+                            off += 3;
+                        }
                     }
                 })
                 .map_err(|e| anyhow!(e))
