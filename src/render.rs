@@ -1,12 +1,13 @@
 use anyhow::{anyhow, Result};
 use lerp::Lerp;
 use sdl2 as sdl;
+use tinyvec::ArrayVec;
 use tracing::*;
 
-use core::f32;
 use std::collections::VecDeque;
 use std::sync::mpsc::Receiver;
 use std::sync::LazyLock;
+use std::{f32, f64};
 
 use super::SAMPLE_RATE;
 
@@ -45,18 +46,20 @@ fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
 }
 
 // https://en.wikipedia.org/wiki/Mel_scale
-fn to_mels(hz: f32) -> f32 {
-    1127.0 * f32::ln(1.0 + hz / 700.0)
+fn to_mels(hz: f64) -> f64 {
+    1127.0 * f64::ln(1.0 + hz / 700.0)
 }
 
-fn from_mels(m: f32) -> f32 {
-    700.0 * (f32::consts::E.powf(m / 1127.0) - 1.0)
+fn from_mels(m: f64) -> f64 {
+    700.0 * (f64::consts::E.powf(m / 1127.0) - 1.0)
 }
 
 /// Crap we don't want to recalculate each pixel about Hz -> Mels
-struct MelInfo {
-    mels_per_pixel: f32,
-    rbw: f32,
+#[derive(Default)]
+struct MelSampler {
+    wholes: ArrayVec<[u16; 3]>,
+    partials: ArrayVec<[(u16, f32); 2]>,
+    width: f32,
 }
 
 pub fn run(
@@ -86,8 +89,8 @@ pub fn run(
     let rbw = nyquist as f64 / width as f64;
     let dft_width = width;
     let width = (upper as f64 / rbw) as usize;
-    let upper_mel = to_mels(upper as f32);
-    let mels_per_pixel = upper_mel / width as f32;
+    let upper_mel = to_mels(upper as f64);
+    let mels_per_pixel = upper_mel / width as f64;
     {
         let mm = if mels {
             format!(" ({:.0} mels)", upper_mel)
@@ -96,11 +99,8 @@ pub fn run(
         };
         info!("DFT width {dft_width}, RBW: {rbw:.0} Hz, {width} bins to {upper:.0} Hz{mm}");
     }
-    let mel_info = if mels {
-        Some(MelInfo {
-            mels_per_pixel,
-            rbw: rbw as f32,
-        })
+    let mel_samplers = if mels {
+        Some(make_make_samplers(width, rbw, mels_per_pixel))
     } else {
         None
     };
@@ -143,7 +143,7 @@ pub fn run(
             pixels.clear();
             for row in rows.iter() {
                 for x in 0..width {
-                    let s = sample(&row.vals, x, &mel_info);
+                    let s = sample(x, &row.vals, &mel_samplers);
                     let rgb = colorize(normalize(&new_bounds, s));
                     pixels.push_back(rgb);
                 }
@@ -156,7 +156,7 @@ pub fn run(
 
             let first_row = rows.front().unwrap();
             for x in (0..width).rev() {
-                let s = sample(&first_row.vals, x, &mel_info);
+                let s = sample(x, &first_row.vals, &mel_samplers);
                 let rgb = colorize(normalize(&bounds.unwrap(), s));
                 pixels.push_front(rgb);
             }
@@ -192,58 +192,81 @@ pub fn run(
     Ok(())
 }
 
-fn sample(row: &[f32], x: usize, mel_info: &Option<MelInfo>) -> f32 {
-    match mel_info {
+fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
+    match mel_samplers {
         None => row[x],
-        Some(mi) => {
-            let xf = x as f32;
-            // We want each pixel to be a fixed number of mels,
-            // but that makes the frequency range in Hz vary logarithmically.
-            // (That's the whole point!)
-            //
-            // Get the bounds of what we need to sample, first in Hertz,
-            let lower_hz = from_mels(mi.mels_per_pixel * xf);
-            let upper_hz = from_mels(mi.mels_per_pixel * (xf + 1.0));
-            // Then using our resolution bandwidth, in samples
-            let low_sample = lower_hz / mi.rbw;
-            let high_sample = upper_hz / mi.rbw;
-            // Consider all the samples we need.
-            let floor = low_sample.floor();
-            let ceil = high_sample.ceil();
-            // println!("{x}: [{lower_hz}Hz, {upper_hz}Hz] -> [{low_sample}, {high_sample}]");
-            if ceil - floor == 1.0 {
-                // Just one sample
-                let of = floor as usize;
-                // println!("    Just {of}");
-                return row[of];
-            }
+        Some(ms) => {
+            let ms = &ms[x];
             let mut acc = 0f32;
-            if floor < low_sample {
-                // The bottom fraction of our window
-                let frac = 1.0 - (low_sample - floor);
-                let of = floor as usize;
-                // println!("    {:.0}% of {}", frac * 100.0, of);
-                acc += frac * row[of];
+            for (i, frac) in ms.partials {
+                acc += row[i as usize] * frac;
             }
-            // The whole samples of our window
-            let low_whole = low_sample.ceil() as usize;
-            let high_whole = high_sample.floor() as usize - 1;
-            if high_whole >= low_whole {
-                for of in low_whole..=high_whole {
-                    // println!("    all of {of}");
-                    acc += row[of];
-                }
+            for i in ms.wholes {
+                acc += row[i as usize];
             }
-            if ceil > high_sample {
-                // The upper fraciton of our window
-                let frac = 1.0 - (ceil - high_sample);
-                let of = ceil as usize - 1;
-                // println!("    {:.0}% of {}", frac * 100.0, of);
-                acc += frac * row[of];
-            }
-            acc / (high_sample - low_sample)
+            acc / ms.width
         }
     }
+}
+
+fn make_make_samplers(width: usize, rbw: f64, mels_per_pixel: f64) -> Box<[MelSampler]> {
+    let mut samps = Vec::with_capacity(width);
+    for x in 0..width {
+        samps.push(make_mel_sampler(x as f64, rbw, mels_per_pixel));
+    }
+    samps.into_boxed_slice()
+}
+
+fn make_mel_sampler(x: f64, rbw: f64, mels_per_pixel: f64) -> MelSampler {
+    let mut ms = MelSampler::default();
+
+    // We want each pixel to be a fixed number of mels,
+    // but that makes the frequency range in Hz vary logarithmically.
+    // (That's the whole point!)
+    //
+    // Get the bounds of what we need to sample, first in Hertz,
+    let lower_hz = from_mels(mels_per_pixel * x);
+    let upper_hz = from_mels(mels_per_pixel * (x + 1.0));
+    // Then using our resolution bandwidth, in samples
+    let low_sample = lower_hz / rbw;
+    let high_sample = upper_hz / rbw;
+    // Consider all the samples we need.
+    let floor = low_sample.floor();
+    let ceil = high_sample.ceil();
+    // println!("{x}: [{lower_hz}Hz, {upper_hz}Hz] -> [{low_sample}, {high_sample}]");
+    if ceil - floor == 1.0 {
+        // Just one sample
+        let of = floor as u16;
+        // println!("    Just {of}");
+        ms.wholes.push(of);
+        ms.width = 1.0;
+        return ms;
+    }
+    if floor < low_sample {
+        // The bottom fraction of our window
+        let frac = 1.0 - (low_sample - floor);
+        let of = floor as u16;
+        // println!("    {:.0}% of {}", frac * 100.0, of);
+        ms.partials.push((of, frac as f32));
+    }
+    // The whole samples of our window
+    let low_whole = low_sample.ceil() as u16;
+    let high_whole = high_sample.floor() as u16 - 1;
+    if high_whole >= low_whole {
+        for of in low_whole..=high_whole {
+            // println!("    all of {of}");
+            ms.wholes.push(of);
+        }
+    }
+    if ceil > high_sample {
+        // The upper fraciton of our window
+        let frac = 1.0 - (ceil - high_sample);
+        let of = ceil as u16 - 1;
+        // println!("    {:.0}% of {}", frac * 100.0, of);
+        ms.partials.push((of, frac as f32))
+    }
+    ms.width = (high_sample - low_sample) as f32;
+    ms
 }
 
 fn normalize(bounds: &GlobalBounds, v: f32) -> f32 {
