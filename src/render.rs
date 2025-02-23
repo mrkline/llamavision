@@ -1,12 +1,12 @@
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use lerp::Lerp;
 use sdl2 as sdl;
 use tinyvec::ArrayVec;
 use tracing::*;
 
 use std::collections::VecDeque;
-use std::sync::mpsc::Receiver;
 use std::sync::LazyLock;
+use std::sync::mpsc::Receiver;
 use std::{f32, f64};
 
 use super::SAMPLE_RATE;
@@ -145,7 +145,7 @@ pub fn run(
                     pixels.clear();
                     for row in rows.iter() {
                         for x in 0..width {
-                            let s = unsafe { sample(x, &row.vals, &mel_samplers) };
+                            let s = sample(x, &row.vals, &mel_samplers);
                             let rgb = colorize(normalize(&new_bounds, s));
                             pixels.push_back(rgb);
                         }
@@ -158,7 +158,7 @@ pub fn run(
 
                     let first_row = rows.front().unwrap();
                     for x in (0..width).rev() {
-                        let s = unsafe { sample(x, &first_row.vals, &mel_samplers) };
+                        let s = sample(x, &first_row.vals, &mel_samplers);
                         let rgb = colorize(normalize(&bounds.unwrap(), s));
                         pixels.push_front(rgb);
                     }
@@ -211,19 +211,22 @@ pub fn run(
     Ok(())
 }
 
-unsafe fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
-    match mel_samplers {
-        None => *row.get_unchecked(x),
-        Some(ms) => {
-            let ms = &ms.get_unchecked(x);
-            let mut acc = 0f32;
-            for (i, frac) in ms.partials {
-                acc += row.get_unchecked(i as usize) * frac;
+fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
+    // I now have a beef with Rust 2024.
+    unsafe {
+        match mel_samplers {
+            None => *row.get_unchecked(x),
+            Some(ms) => {
+                let ms = &ms.get_unchecked(x);
+                let mut acc = 0f32;
+                for (i, frac) in ms.partials {
+                    acc += row.get_unchecked(i as usize) * frac;
+                }
+                for i in ms.wholes {
+                    acc += row.get_unchecked(i as usize);
+                }
+                acc / ms.width
             }
-            for i in ms.wholes {
-                acc += row.get_unchecked(i as usize);
-            }
-            acc / ms.width
         }
     }
 }
