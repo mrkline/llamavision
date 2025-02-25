@@ -11,38 +11,38 @@ use std::{f32, f64};
 
 use super::SAMPLE_RATE;
 
-struct Row {
-    vals: Vec<f32>,
-    min: f32,
-    max: f32,
-}
-
-impl Row {
-    fn new(vals: Vec<f32>) -> Self {
-        let mut min = f32::INFINITY;
-        let mut max = f32::NEG_INFINITY;
-        for v in &vals {
-            min = min.min(*v);
-            max = max.max(*v);
-        }
-        Self { vals, min, max }
-    }
-}
-
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct GlobalBounds {
+struct Bounds {
     min: f32,
     max: f32,
 }
 
-fn global_bounds<'a>(it: impl Iterator<Item = &'a Row>) -> GlobalBounds {
-    let mut min = f32::INFINITY;
-    let mut max = f32::NEG_INFINITY;
-    for r in it {
-        min = min.min(r.min);
-        max = max.max(r.max);
+impl Bounds {
+    fn from_row(vals: &[f32]) -> Option<Self> {
+        let mut b: Option<(f32, f32)> = None;
+        for v in vals {
+            // Don't scale to silence.
+            if *v == f32::NEG_INFINITY {
+                continue;
+            }
+            b = match b {
+                None => Some((*v, *v)),
+                Some((min, max)) => Some((min.min(*v), max.max(*v))),
+            };
+        }
+        b.map(|(min, max)| {
+            // 16-bit audio has about 100 dB of SNR,
+            // so don't bother with a bunch of redraws under that.
+            let min = min.max(-100.0);
+            Self { min, max }
+        })
     }
-    GlobalBounds { min, max }
+    fn expand_to(&self, o: &Self) -> Self {
+        Self {
+            min: self.min.min(o.min),
+            max: self.max.max(o.max),
+        }
+    }
 }
 
 // https://en.wikipedia.org/wiki/Mel_scale
@@ -123,7 +123,7 @@ pub fn run(
     let mut rows = VecDeque::with_capacity(height);
     let area = height * width;
     let mut pixels = VecDeque::with_capacity(area);
-    let mut bounds = None;
+    let mut bounds: Option<Bounds> = None;
 
     while let Ok(new_row) = rows_rx.recv() {
         let quit = span!(Level::DEBUG, "render").in_scope(|| -> Result<bool> {
@@ -131,21 +131,37 @@ pub fn run(
             if rows.len() == height {
                 rows.pop_back();
             }
-            rows.push_front(Row::new(new_row));
+            let new_row_bounds = Bounds::from_row(&new_row);
+            rows.push_front(new_row);
 
             // Check dB bounds and possibly recolorize
             span!(Level::DEBUG, "norm-colorize").in_scope(|| {
-                let new_bounds = global_bounds(rows.iter());
-                if bounds != Some(new_bounds) {
-                    debug!(
-                        "Redrawing all; new range [{:.2} dB, {:.2} dB]",
+                // The sound of silence:
+                if new_row_bounds.is_none() {
+                    pixels.truncate(area - width);
+                    for _ in 0..width {
+                        let rgb = RGB { r: 0, g: 0, b: 0 };
+                        pixels.push_front(rgb);
+                    }
+                    return;
+                }
+                let new_row_bounds = new_row_bounds.unwrap();
+
+                let new_bounds: Option<Bounds> = match bounds {
+                    Some(prev) => Some(prev.expand_to(&new_row_bounds)),
+                    None => Some(new_row_bounds),
+                };
+                if bounds != new_bounds {
+                    bounds = new_bounds;
+                    let new_bounds = new_bounds.expect("new bounds must be something");
+                    info!(
+                        "New AGC bounds: [{:.2} dB, {:.2} dB]",
                         new_bounds.min, new_bounds.max
                     );
-                    bounds = Some(new_bounds);
                     pixels.clear();
                     for row in rows.iter() {
                         for x in 0..width {
-                            let s = sample(x, &row.vals, &mel_samplers);
+                            let s = sample(x, &row, &mel_samplers);
                             let rgb = colorize(normalize(&new_bounds, s));
                             pixels.push_back(rgb);
                         }
@@ -158,7 +174,7 @@ pub fn run(
 
                     let first_row = rows.front().unwrap();
                     for x in (0..width).rev() {
-                        let s = sample(x, &first_row.vals, &mel_samplers);
+                        let s = sample(x, &first_row, &mel_samplers);
                         let rgb = colorize(normalize(&bounds.unwrap(), s));
                         pixels.push_front(rgb);
                     }
@@ -196,7 +212,36 @@ pub fn run(
                     | Event::KeyDown {
                         keycode: Some(sdl::keyboard::Keycode::Escape),
                         ..
+                    }
+                    | Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::Q),
+                        ..
                     } => return Ok(true),
+
+                    Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::R), // Rescale
+                        ..
+                    } => {
+                        fn f(acc: Option<Bounds>, x: Bounds) -> Option<Bounds> {
+                            match acc {
+                                Some(prev) => Some(prev.expand_to(&x)),
+                                None => Some(x),
+                            }
+                        }
+                        bounds = rows
+                            .iter()
+                            .map(|r| Bounds::from_row(r))
+                            .flatten()
+                            .fold(None, f);
+                        if let Some(b) = bounds {
+                            info!(
+                                "Resetting AGC to screen contents: [{:.2} dB, {:.2} dB]",
+                                b.min, b.max
+                            );
+                        } else {
+                            info!("Resetting AGC");
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -291,15 +336,20 @@ fn make_mel_sampler(x: f64, rbw: f64, mels_per_pixel: f64) -> MelSampler {
     ms
 }
 
-fn normalize(bounds: &GlobalBounds, v: f32) -> f32 {
-    let min = bounds.min.max(-100.0);
-    if v <= min {
-        0.0
-    } else {
-        assert!(bounds.max > f32::NEG_INFINITY);
-        let range = bounds.max - min;
-        (v - min) / range
+fn normalize(bounds: &Bounds, v: f32) -> f32 {
+    if v < bounds.min {
+        return 0.0; // (usually -INF)
     }
+    // Checked in colorize below:
+    // assert!(
+    //     v >= bounds.min && v <= bounds.max,
+    //     "{} {} {}",
+    //     bounds.min,
+    //     bounds.max,
+    //     v
+    // );
+    let range = bounds.max - bounds.min;
+    (v - bounds.min) / range
 }
 
 #[repr(packed(1))]
