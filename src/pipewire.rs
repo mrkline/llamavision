@@ -25,7 +25,7 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
         *pw::keys::MEDIA_ROLE => "Music",
         *pw::keys::STREAM_CAPTURE_SINK => "true", // configurable source as arg?
         *pw::keys::NODE_ALWAYS_PROCESS => "true",
-        *pw::keys::NODE_LATENCY => format!("2048/{SAMPLE_RATE}"),
+        *pw::keys::NODE_LATENCY => format!("1024/{SAMPLE_RATE}"),
     };
 
     let stream = pw::stream::Stream::new(&core, "llamavision", props)?;
