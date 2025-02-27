@@ -237,6 +237,7 @@ pub fn run(
                             off += 3;
                         }
                     }
+                    tex[off..].fill(0);
                 })
                 .map_err(|e| anyhow!(e))
             })?;
@@ -252,6 +253,16 @@ pub fn run(
                         keycode: Some(sdl::keyboard::Keycode::Q),
                         ..
                     } => return Ok(true),
+
+                    Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::C), // Clear
+                        ..
+                    } => {
+                        info!("Clearing waterfall");
+                        bounds = None;
+                        pixels.clear();
+                        rows.clear();
+                    }
 
                     Event::KeyDown {
                         keycode: Some(sdl::keyboard::Keycode::R), // Rescale
