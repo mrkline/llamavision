@@ -107,9 +107,10 @@ pub fn run(
 
     let w = width as u32;
     let h = height as u32;
+    let vu_height = 100u32;
 
     let mut canvas = vidya
-        .window("llamavision", w, h)
+        .window("llamavision", w, h + vu_height)
         .resizable()
         .build()?
         .into_canvas()
@@ -118,12 +119,14 @@ pub fn run(
         .build()?;
 
     let tc = canvas.texture_creator();
-    let mut tex = tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h)?;
+    let mut tex =
+        tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h + vu_height)?;
 
     let mut rows = VecDeque::with_capacity(height);
     let area = height * width;
     let mut pixels = VecDeque::with_capacity(area);
     let mut bounds: Option<Bounds> = None;
+    let mut vu_meter = vec![0f32; width].into_boxed_slice();
 
     while let Ok(new_row) = rows_rx.recv() {
         let quit = span!(Level::DEBUG, "render").in_scope(|| -> Result<bool> {
@@ -134,14 +137,14 @@ pub fn run(
             let new_row_bounds = Bounds::from_row(&new_row);
             rows.push_front(new_row);
 
-            // Check dB bounds and possibly recolorize
+            // Check dB bounds and possibly renormalize & recolorize
             span!(Level::DEBUG, "norm-colorize").in_scope(|| {
                 // The sound of silence:
                 if new_row_bounds.is_none() {
                     pixels.truncate(area - width);
-                    for _ in 0..width {
-                        let rgb = RGB { r: 0, g: 0, b: 0 };
-                        pixels.push_front(rgb);
+                    for x in 0..width {
+                        pixels.push_front(RGB::default());
+                        unsafe { *vu_meter.get_unchecked_mut(x) = 0.0 };
                     }
                     return;
                 }
@@ -166,16 +169,28 @@ pub fn run(
                             pixels.push_back(rgb);
                         }
                     }
+                    // Resample the first row; not great, not terrible.
+                    let first_row = &rows[0];
+                    for x in 0..width {
+                        let s = sample(x, first_row, &mel_samplers);
+                        let n = normalize(&new_bounds, s);
+                        unsafe {
+                            *vu_meter.get_unchecked_mut(x) = n;
+                        };
+                    }
                 }
                 // If we don't a new dB range, we we don't have to recolorize the whole screen.
                 // We just have to colorize a single row, and possibly shave the oldest one off.
                 else {
+                    let bounds = bounds.unwrap();
                     pixels.truncate(area - width);
 
                     let first_row = rows.front().unwrap();
                     for x in (0..width).rev() {
                         let s = sample(x, &first_row, &mel_samplers);
-                        let rgb = colorize(normalize(&bounds.unwrap(), s));
+                        let n = normalize(&bounds, s);
+                        unsafe { *vu_meter.get_unchecked_mut(x) = n };
+                        let rgb = colorize(n);
                         pixels.push_front(rgb);
                     }
                 }
@@ -184,9 +199,29 @@ pub fn run(
             // For now redraw everything to the texture.
             span!(Level::DEBUG, "blit").in_scope(|| -> Result<()> {
                 tex.with_lock(None, |tex, pitch| {
+                    // VU meter
+                    for y in 0..vu_height {
+                        let row_start = pitch * y as usize;
+                        let norm_height = (vu_height - y) as f32 / vu_height as f32;
+                        for x in 0..width {
+                            unsafe {
+                                let p = if norm_height <= *vu_meter.get_unchecked(x) {
+                                    pixels[x]
+                                } else {
+                                    RGB::default()
+                                };
+                                let off = row_start + (x * 3);
+                                *tex.get_unchecked_mut(off) = p.r;
+                                *tex.get_unchecked_mut(off + 1) = p.g;
+                                *tex.get_unchecked_mut(off + 2) = p.b;
+                            }
+                        }
+                    }
+
+                    // Waterfall
                     let mut x = 0;
-                    let mut y = 0;
-                    let mut off = 0;
+                    let mut y = vu_height as usize;
+                    let mut off = pitch * y;
                     for p in pixels.iter() {
                         unsafe {
                             *tex.get_unchecked_mut(off) = p.r;
@@ -353,6 +388,7 @@ fn normalize(bounds: &Bounds, v: f32) -> f32 {
 }
 
 #[repr(packed(1))]
+#[derive(Default, Copy, Clone)]
 struct RGB {
     r: u8,
     g: u8,

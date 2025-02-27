@@ -1,10 +1,10 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use tracing::*;
 
 use std::sync::{
     atomic::AtomicBool,
-    mpsc::{channel, sync_channel, Sender},
+    mpsc::{Sender, channel, sync_channel},
 };
 
 mod fft;
@@ -19,7 +19,7 @@ struct Args {
     verbose: u8,
 
     /// DFT width
-    #[clap(short, long, default_value_t = 2048)]
+    #[clap(short, long, default_value_t = 1024)]
     width: usize,
 
     /// History length
