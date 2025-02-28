@@ -3,18 +3,16 @@ use pipewire as pw;
 use pw::spa;
 use tracing::*;
 
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc::{SyncSender, TrySendError},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::pingpong::PingPongWriter;
 use super::{QUANTUM, SAMPLE_RATE};
 
 struct UserData {
-    tx: SyncSender<Vec<i16>>,
+    tx: PingPongWriter<Vec<i16>>,
 }
 
-pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
+pub fn run(ready: &'static AtomicBool, tx: PingPongWriter<Vec<i16>>) -> Result<()> {
     let mainloop = pw::main_loop::MainLoop::new(None)?;
     let context = pw::context::Context::new(&mainloop)?;
     let core = context.connect(None)?;
@@ -92,17 +90,12 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
                         assert_eq!(unaligned_post.len(), 0);
                         trace!("{} samples", samples.len());
 
-                        let to_send = samples.to_owned();
-                        match user_data.tx.try_send(to_send) {
-                            Ok(()) => (),
-                            Err(TrySendError::Full(s)) => {
-                                if ready.load(Ordering::Relaxed) {
-                                    warn!("audio queue full; dropping {} samples", s.len())
-                                }
-                            }
-                            Err(TrySendError::Disconnected(_)) => {
-                                unreachable!();
-                            }
+                        let f = |dest: &mut Vec<i16>| {
+                            dest.clear();
+                            dest.extend_from_slice(samples)
+                        };
+                        if !user_data.tx.write(f) && ready.load(Ordering::Relaxed) {
+                            warn!("audio queue full; dropping {} samples", samples.len())
                         }
                     }
                 })

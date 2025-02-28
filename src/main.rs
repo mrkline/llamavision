@@ -8,6 +8,7 @@ use std::sync::{
 };
 
 mod fft;
+mod pingpong;
 mod pipewire;
 mod render;
 
@@ -67,7 +68,7 @@ fn run(args: Args) -> Result<()> {
     } = args;
 
     let (err_tx, err_rx) = channel();
-    let (audio_tx, audio_rx) = sync_channel(8);
+    let (audio_tx, audio_rx) = pingpong::ping_pong(Vec::with_capacity(QUANTUM));
     let (rows_tx, rows_rx) = sync_channel(8);
     fanout(&err_tx, "fft", move || {
         fft::run(width, &FFTW_READY, audio_rx, rows_tx)

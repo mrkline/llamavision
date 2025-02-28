@@ -9,13 +9,15 @@ use tracing::*;
 use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc::{Receiver, SyncSender},
+    mpsc::SyncSender,
 };
+
+use super::pingpong::PingPongReader;
 
 pub fn run(
     width: usize,
     ready: &AtomicBool,
-    audio_rx: Receiver<Vec<i16>>,
+    audio_rx: PingPongReader<Vec<i16>>,
     rows_tx: SyncSender<Vec<f32>>,
 ) -> Result<()> {
     let in_width = width * 2;
@@ -30,10 +32,13 @@ pub fn run(
     let mut normalized_audio = VecDeque::with_capacity(width * 3);
 
     ready.store(true, Ordering::SeqCst);
-    while let Ok(samps) = audio_rx.recv() {
-        for s in samps {
-            normalized_audio.push_back(s as f32 / i16::MAX as f32);
-        }
+    loop {
+        let f = |samps: &Vec<i16>| {
+            for s in samps {
+                normalized_audio.push_back(*s as f32 / i16::MAX as f32);
+            }
+        };
+        audio_rx.read(f);
         while normalized_audio.len() >= in_width {
             let row = fft(&normalized_audio, &window, &mut plan, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
@@ -42,7 +47,6 @@ pub fn run(
             normalized_audio.drain(..(in_width / 2)); // 50% FFT overlap
         }
     }
-    unreachable!();
 }
 
 #[allow(non_snake_case)]
