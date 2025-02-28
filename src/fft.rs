@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use fftw::{
     array::AlignedVec,
     plan::{R2CPlan, R2CPlan32},
-    types::{c32, Flag},
+    types::{Flag, c32},
 };
 use tracing::*;
 
@@ -37,14 +37,12 @@ pub fn run(
         while normalized_audio.len() >= in_width {
             let row = fft(&normalized_audio, &window, &mut plan, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
-            if let Err(_) = rows_tx.send(row) {
-                break;
-            }
+            rows_tx.send(row)?;
             // Shave in_width off
             normalized_audio.drain(..(in_width / 2)); // 50% FFT overlap
         }
     }
-    Ok(())
+    unreachable!();
 }
 
 #[allow(non_snake_case)]
@@ -66,7 +64,7 @@ fn blackman_harris(width: usize) -> Vec<f32> {
     bh
 }
 
-#[instrument(level = "trace", skip_all)]
+#[instrument(level = "debug", skip_all)]
 fn fft(
     normalized_audio: &VecDeque<f32>,
     window: &[f32],

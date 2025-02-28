@@ -13,6 +13,8 @@ mod render;
 
 pub const SAMPLE_RATE: usize = 44100;
 
+pub const QUANTUM: usize = 1024;
+
 #[derive(Parser)]
 struct Args {
     #[clap(short, long, action(clap::ArgAction::Count))]
@@ -90,8 +92,7 @@ where
     std::thread::spawn(move || {
         let s3 = s2.clone();
         std::panic::set_hook(Box::new(move |p| {
-            s3.send(Err(anyhow!("{name} thread panicked: {p}")))
-                .unwrap();
+            let _ = s3.send(Err(anyhow!("{name} thread panicked: {p}")));
         }));
         s2.send(f().with_context(|| format!("{name} thread failed")))
             .unwrap();

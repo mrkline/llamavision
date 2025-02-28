@@ -8,7 +8,7 @@ use std::sync::{
     mpsc::{SyncSender, TrySendError},
 };
 
-use super::SAMPLE_RATE;
+use super::{QUANTUM, SAMPLE_RATE};
 
 struct UserData {
     tx: SyncSender<Vec<i16>>,
@@ -25,7 +25,7 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
         *pw::keys::MEDIA_ROLE => "Music",
         *pw::keys::STREAM_CAPTURE_SINK => "true", // configurable source as arg?
         *pw::keys::NODE_ALWAYS_PROCESS => "true",
-        *pw::keys::NODE_LATENCY => format!("1024/{SAMPLE_RATE}"),
+        *pw::keys::NODE_LATENCY => format!("{QUANTUM}/{SAMPLE_RATE}"),
     };
 
     let stream = pw::stream::Stream::new(&core, "llamavision", props)?;
@@ -66,45 +66,46 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
         .process(|stream, user_data| match stream.dequeue_buffer() {
             None => println!("out of buffers"),
             Some(mut buffer) => {
-                let datas = buffer.datas_mut();
-                if datas.is_empty() {
-                    return;
-                }
+                span!(Level::DEBUG, "pipewire").in_scope(|| {
+                    let datas = buffer.datas_mut();
+                    if datas.is_empty() {
+                        return;
+                    }
 
-                // Lots-o-cargo cult from the examples, but let's assert some assumptions.
-                assert_eq!(datas.len(), 1); // <= 1 buffer per callback
-                let data = &mut datas[0];
+                    // Lots-o-cargo cult from the examples, but let's assert some assumptions.
+                    assert_eq!(datas.len(), 1); // <= 1 buffer per callback
+                    let data = &mut datas[0];
 
-                let chunk_size = data.chunk().size() as usize;
-                let chunk_off = data.chunk().offset() as usize;
-                assert_eq!(data.chunk().stride(), 2); // Stride is 2 bytes per sample (s16)
+                    let chunk_size = data.chunk().size() as usize;
+                    let chunk_off = data.chunk().offset() as usize;
+                    assert_eq!(data.chunk().stride(), 2); // Stride is 2 bytes per sample (s16)
 
-                // Data is some yuge buffer. Pick out the samples specified by the chunk,
-                // starting at its offset.
-                if let Some(d) = data.data() {
-                    let sample_bytes = &d[chunk_off..(chunk_off + chunk_size)];
-                    // Cast to a slice of [i16]. If we haven't fucked up the math,
-                    // we should have 0 bytes before or after.
-                    let (unaligned_pre, samples, unaligned_post): (_, &[i16], _) =
-                        unsafe { sample_bytes.align_to() };
-                    assert_eq!(unaligned_pre.len(), 0);
-                    assert_eq!(unaligned_post.len(), 0);
-                    trace!("{} samples", samples.len());
+                    // Data is some yuge buffer. Pick out the samples specified by the chunk,
+                    // starting at its offset.
+                    if let Some(d) = data.data() {
+                        let sample_bytes = &d[chunk_off..(chunk_off + chunk_size)];
+                        // Cast to a slice of [i16]. If we haven't fucked up the math,
+                        // we should have 0 bytes before or after.
+                        let (unaligned_pre, samples, unaligned_post): (_, &[i16], _) =
+                            unsafe { sample_bytes.align_to() };
+                        assert_eq!(unaligned_pre.len(), 0);
+                        assert_eq!(unaligned_post.len(), 0);
+                        trace!("{} samples", samples.len());
 
-                    let to_send = samples.to_owned();
-                    match user_data.tx.try_send(to_send) {
-                        Ok(()) => (),
-                        Err(TrySendError::Full(s)) => {
-                            if ready.load(Ordering::Relaxed) {
-                                warn!("audio queue full; dropping {} samples", s.len())
+                        let to_send = samples.to_owned();
+                        match user_data.tx.try_send(to_send) {
+                            Ok(()) => (),
+                            Err(TrySendError::Full(s)) => {
+                                if ready.load(Ordering::Relaxed) {
+                                    warn!("audio queue full; dropping {} samples", s.len())
+                                }
+                            }
+                            Err(TrySendError::Disconnected(_)) => {
+                                unreachable!();
                             }
                         }
-                        Err(TrySendError::Disconnected(_)) => {
-                            error!("audio queue hung up; quitting pipewire");
-                            let _ = stream.disconnect();
-                        }
                     }
-                }
+                })
             }
         })
         .register()?;
@@ -143,6 +144,5 @@ pub fn run(ready: &'static AtomicBool, tx: SyncSender<Vec<i16>>) -> Result<()> {
     )?;
 
     mainloop.run();
-
-    Ok(())
+    unreachable!();
 }

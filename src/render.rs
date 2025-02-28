@@ -115,8 +115,7 @@ pub fn run(
         .build()?
         .into_canvas()
         .accelerated()
-        .present_vsync()
-        .build()?;
+        .build()?; // No vsync - we can and will go faster than 60 Hz depending on width.
 
     let tc = canvas.texture_creator();
     let mut tex =
@@ -129,7 +128,7 @@ pub fn run(
     let mut vu_meter = vec![0f32; width].into_boxed_slice();
 
     while let Ok(new_row) = rows_rx.recv() {
-        let quit = span!(Level::DEBUG, "render").in_scope(|| -> Result<bool> {
+        span!(Level::DEBUG, "render").in_scope(|| -> Result<()> {
             assert!(rows.len() <= height);
             if rows.len() == height {
                 rows.pop_back();
@@ -252,7 +251,7 @@ pub fn run(
                     | Event::KeyDown {
                         keycode: Some(sdl::keyboard::Keycode::Q),
                         ..
-                    } => return Ok(true),
+                    } => std::process::exit(0),
 
                     Event::KeyDown {
                         keycode: Some(sdl::keyboard::Keycode::C), // Clear
@@ -293,13 +292,10 @@ pub fn run(
             }
             canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
             canvas.present();
-            Ok(false)
+            Ok(())
         })?;
-        if quit {
-            break;
-        }
     }
-    Ok(())
+    unreachable!();
 }
 
 fn sample(x: usize, row: &[f32], mel_samplers: &Option<Box<[MelSampler]>>) -> f32 {
