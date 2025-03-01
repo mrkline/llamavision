@@ -94,7 +94,7 @@ pub fn run(ready: &'static AtomicBool, tx: PingPongWriter<Vec<i16>>) -> Result<(
                             dest.clear();
                             dest.extend_from_slice(samples)
                         };
-                        if !user_data.tx.write(f) && ready.load(Ordering::Relaxed) {
+                        if !user_data.tx.try_write(f) && ready.load(Ordering::Relaxed) {
                             warn!("audio queue full; dropping {} samples", samples.len())
                         }
                     }

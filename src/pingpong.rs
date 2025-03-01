@@ -53,15 +53,31 @@ impl<T: Clone> PingPong<T> {
         }
     }
 
-    fn write<F: FnOnce(&mut T)>(&self, f: F) -> bool {
-        let s = self.sync.load(Ordering::Acquire);
+    fn write<F: FnOnce(&mut T)>(&self, f: F) {
+        // Wait for the reader to catch up.
+        let mut s;
+        loop {
+            s = self.sync.load(Ordering::Acquire);
+            if is_ready(s) {
+                futex::wait(&self.sync, s);
+            } else {
+                break;
+            }
+        }
+        self.write_swap_wake(s, f);
+    }
 
-        // Writers ain't got no time to wait for a slow reader.
-        // (Slightly fancier would be to make this a try_write(),
-        // and have write() sleep, awoken when the reader clears the ready bit.)
+    fn try_write<F: FnOnce(&mut T)>(&self, f: F) -> bool {
+        let s = self.sync.load(Ordering::Acquire);
         if is_ready(s) {
+            // This is the non-blocking version, don't wait for the reader.
             return false;
         }
+        self.write_swap_wake(s, f);
+        true
+    }
+
+    fn write_swap_wake<F: FnOnce(&mut T)>(&self, s: u32, f: F) {
         // SAFETY: The reader is looking at the other guy. Write this one...
         f(unsafe { self.bufs[write_index(s)].get().as_mut().unwrap() });
 
@@ -69,7 +85,6 @@ impl<T: Clone> PingPong<T> {
         self.sync
             .store(set_ready(swap_indexes(s)), Ordering::Release);
         futex::wake_one(&self.sync);
-        true
     }
 
     fn read<F: FnOnce(&T)>(&self, f: F) {
@@ -78,17 +93,33 @@ impl<T: Clone> PingPong<T> {
         loop {
             s = self.sync.load(Ordering::Acquire);
             if is_ready(s) {
-                // Immediately clear the ready bit so the writer can start writing
-                // to the other slot.
-                self.sync.store(clear_ready(s), Ordering::Release);
                 break;
+            } else {
+                futex::wait(&self.sync, s);
             }
-            futex::wait(&self.sync, s);
         }
+        self.clear_wake_read(s, f);
+    }
+
+    fn try_read<F: FnOnce(&T)>(&self, f: F) -> bool {
+        // Check if the writer has something for us to read
+        let s = self.sync.load(Ordering::Acquire);
+        if is_ready(s) {
+            self.clear_wake_read(s, f);
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear_wake_read<F: FnOnce(&T)>(&self, s: u32, f: F) {
+        // First clear the ready bit so the writer can start writing
+        // to the other slot while we read. Wake them up too.
+        self.sync.store(clear_ready(s), Ordering::Release);
+        futex::wake_one(&self.sync);
         // SAFETY: The writer always writes to opposite index. One can't outpace
         //         the other since the writer will not write a second item
-        //         before the reader reads one..
-        //         (See the sync dance on the ready bit above.)
+        //         before the reader reads one.
         f(unsafe { self.bufs[read_index(s)].get().as_ref().unwrap() });
     }
 }
@@ -98,8 +129,12 @@ pub struct PingPongWriter<T> {
 }
 
 impl<T: Clone> PingPongWriter<T> {
-    pub fn write<F: FnOnce(&mut T)>(&self, f: F) -> bool {
+    pub fn write<F: FnOnce(&mut T)>(&self, f: F) {
         self.inner.write(f)
+    }
+
+    pub fn try_write<F: FnOnce(&mut T)>(&self, f: F) -> bool {
+        self.inner.try_write(f)
     }
 }
 
@@ -110,6 +145,10 @@ pub struct PingPongReader<T> {
 impl<T: Clone> PingPongReader<T> {
     pub fn read<F: FnOnce(&T)>(&self, f: F) {
         self.inner.read(f)
+    }
+
+    pub fn try_read<F: FnOnce(&T)>(&self, f: F) -> bool {
+        self.inner.try_read(f)
     }
 }
 
