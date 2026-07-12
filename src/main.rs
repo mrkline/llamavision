@@ -40,6 +40,8 @@ struct Args {
 
 static FFTW_READY: AtomicBool = AtomicBool::new(false);
 
+static APPLY_WINDOW: AtomicBool = AtomicBool::new(true);
+
 fn main() {
     let args = Args::parse();
     let level = match args.verbose {
@@ -71,13 +73,13 @@ fn run(args: Args) -> Result<()> {
     let (audio_tx, audio_rx) = pingpong::ping_pong(Vec::with_capacity(QUANTUM));
     let (rows_tx, rows_rx) = sync_channel(8);
     fanout(&err_tx, "fft", move || {
-        fft::run(width, &FFTW_READY, audio_rx, rows_tx)
+        fft::run(width, &APPLY_WINDOW, &FFTW_READY, audio_rx, rows_tx)
     });
     fanout(&err_tx, "pipewire", move || {
         pipewire::run(&FFTW_READY, audio_tx)
     });
     fanout(&err_tx, "SDL render", move || {
-        render::run(width, height, upper, mels, rows_rx)
+        render::run(width, height, upper, mels, &APPLY_WINDOW, rows_rx)
     });
     drop(err_tx);
 

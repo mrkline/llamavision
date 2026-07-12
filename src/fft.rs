@@ -16,6 +16,7 @@ use super::pingpong::PingPongReader;
 
 pub fn run(
     width: usize,
+    apply_window: &AtomicBool,
     ready: &AtomicBool,
     audio_rx: PingPongReader<Vec<i16>>,
     rows_tx: SyncSender<Vec<f32>>,
@@ -40,7 +41,7 @@ pub fn run(
         };
         audio_rx.read(f);
         while normalized_audio.len() >= in_width {
-            let row = fft(&normalized_audio, &window, &mut plan, &mut ins, &mut outs)?;
+            let row = fft(&normalized_audio, &window, &mut plan, &apply_window, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
             rows_tx.send(row)?;
             // Shave in_width off
@@ -73,12 +74,18 @@ fn fft(
     normalized_audio: &VecDeque<f32>,
     window: &[f32],
     plan: &mut R2CPlan32,
+    apply_window: &AtomicBool,
     ins: &mut AlignedVec<f32>,
     outs: &mut AlignedVec<c32>,
 ) -> Result<Vec<f32>> {
-    // Window
-    for (n, i_n) in ins.iter_mut().enumerate() {
-        *i_n = window[n] * normalized_audio[n];
+    if apply_window.load(Ordering::Relaxed) {
+        for (n, i_n) in ins.iter_mut().enumerate() {
+            *i_n = window[n] * normalized_audio[n];
+        }
+    } else {
+        for (n, i_n) in ins.iter_mut().enumerate() {
+            *i_n = normalized_audio[n];
+        }
     }
 
     plan.r2c(ins, outs).context("fft failed")?;

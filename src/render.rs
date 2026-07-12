@@ -5,6 +5,7 @@ use tinyvec::ArrayVec;
 use tracing::*;
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use std::sync::mpsc::Receiver;
 use std::{f32, f64};
@@ -67,6 +68,7 @@ pub fn run(
     height: usize,
     mut upper: usize,
     mels: bool,
+    apply_window: &AtomicBool,
     rows_rx: Receiver<Vec<f32>>,
 ) -> Result<()> {
     let context = sdl::init()?;
@@ -277,6 +279,18 @@ pub fn run(
                         } else {
                             info!("Resetting AGC");
                         }
+                    }
+                    Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::W), // Windowing
+                        ..
+                    } => {
+                        let prev = apply_window.load(Ordering::Relaxed);
+                        if prev {
+                            info!("Turning windowing off");
+                        } else {
+                            info!("Turning windowing on");
+                        }
+                        apply_window.store(!prev, Ordering::Relaxed);
                     }
                     _ => {}
                 }
