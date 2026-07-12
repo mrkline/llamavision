@@ -342,8 +342,9 @@ fn make_mel_sampler(x: f64, rbw: f64, mels_per_pixel: f64) -> MelSampler {
     let lower_hz = from_mels(mels_per_pixel * x);
     let upper_hz = from_mels(mels_per_pixel * (x + 1.0));
     // Then using our resolution bandwidth, in samples
-    let low_sample = lower_hz / rbw;
-    let high_sample = upper_hz / rbw;
+    // NB: We skipped over DC, so shift samples down one sample
+    let low_sample = (lower_hz / rbw - 1.0).max(0.0);
+    let high_sample = (upper_hz / rbw - 1.0).max(f64:MIN_POSITIVE);
     // Consider all the samples we need.
     let floor = low_sample.floor();
     let ceil = high_sample.ceil();
