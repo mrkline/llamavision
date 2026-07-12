@@ -1,6 +1,6 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use lerp::Lerp;
-use sdl2 as sdl;
+use sdl3 as sdl;
 use tinyvec::ArrayVec;
 use tracing::*;
 
@@ -69,17 +69,9 @@ pub fn run(
     mels: bool,
     rows_rx: Receiver<Vec<f32>>,
 ) -> Result<()> {
-    let context = sdl::init().map_err(|e| anyhow!(e))?;
-    let mut event_pump = context.event_pump().map_err(|e| anyhow!(e))?;
-    let vidya = context.video().map_err(|e| anyhow!(e))?;
-    sdl::hint::set(
-        // lol should I just use a string literal?
-        std::ffi::CStr::from_bytes_until_nul(sdl::sys::SDL_HINT_RENDER_SCALE_QUALITY)
-            .unwrap()
-            .to_str()
-            .unwrap(),
-        "best",
-    );
+    let context = sdl::init()?;
+    let mut event_pump = context.event_pump()?;
+    let vidya = context.video()?;
 
     let nyquist = SAMPLE_RATE / 2;
     if upper > nyquist {
@@ -113,13 +105,12 @@ pub fn run(
         .window("llamavision", w, h + vu_height)
         .resizable()
         .build()?
-        .into_canvas()
-        .accelerated()
-        .build()?; // No vsync - we can and will go faster than 60 Hz depending on width.
+        .into_canvas(); // No vsync - we can and will go faster than 60 Hz depending on width.
 
     let tc = canvas.texture_creator();
     let mut tex =
-        tc.create_texture_streaming(sdl::pixels::PixelFormatEnum::RGB24, w, h + vu_height)?;
+        tc.create_texture_streaming(sdl::pixels::PixelFormat::RGB24, w, h + vu_height)?;
+    tex.set_scale_mode(sdl::render::ScaleMode::Linear);
 
     let mut rows = VecDeque::with_capacity(height);
     let area = height * width;
@@ -238,7 +229,7 @@ pub fn run(
                     }
                     tex[off..].fill(0);
                 })
-                .map_err(|e| anyhow!(e))
+                .map_err(anyhow::Error::from)
             })?;
             for event in event_pump.poll_iter() {
                 use sdl::event::Event;
@@ -290,7 +281,7 @@ pub fn run(
                     _ => {}
                 }
             }
-            canvas.copy(&tex, None, None).map_err(|e| anyhow!(e))?;
+            canvas.copy(&tex, None, None)?;
             canvas.present();
             Ok(())
         })?;

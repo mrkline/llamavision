@@ -100,7 +100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "271383c67ccabffb7381723dea0672a673f292304fcb45c01cc648c7a8d58088"
 dependencies = [
  "annotate-snippets",
- "bitflags 2.13.0",
+ "bitflags",
  "cexpr",
  "clang-sys",
  "itertools",
@@ -116,21 +116,9 @@ dependencies = [
 
 [[package]]
 name = "bitflags"
-version = "1.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
-
-[[package]]
-name = "bitflags"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8"
-
-[[package]]
-name = "c_vec"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdd7a427adc0135366d99db65b36dae9237130997e560ed61118041fb72be6e8"
 
 [[package]]
 name = "cc"
@@ -260,7 +248,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ca544f4c7f2c162c493d084893ec81b9dc3c17e43098d6c3e0c6f9a4173c5d2"
 dependencies = [
- "bitflags 2.13.0",
+ "bitflags",
  "fftw-sys",
  "lazy_static",
  "ndarray",
@@ -459,7 +447,7 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65f3a4b81b2a2d8c7f300643676202debd1b7c929dbf5c9bb89402ea11d19810"
 dependencies = [
- "bitflags 2.13.0",
+ "bitflags",
  "cc",
  "convert_case",
  "cookie-factory",
@@ -491,7 +479,7 @@ dependencies = [
  "fftw",
  "lerp",
  "pipewire",
- "sdl2",
+ "sdl3",
  "tinyvec",
  "tracing",
  "tracing-subscriber",
@@ -544,7 +532,7 @@ version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
 dependencies = [
- "bitflags 2.13.0",
+ "bitflags",
  "cfg-if",
  "libc",
 ]
@@ -620,7 +608,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08e645ba5c45109106d56610b3ee60eb13a6f2beb8b74f8dc8186cf261788dda"
 dependencies = [
  "anyhow",
- "bitflags 2.13.0",
+ "bitflags",
  "libc",
  "libspa",
  "libspa-sys",
@@ -707,27 +695,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
-name = "sdl2"
-version = "0.38.0"
+name = "sdl3"
+version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d42407afc6a8ab67e36f92e80b8ba34cbdc55aaeed05249efe9a2e8d0e9feef"
+checksum = "25bd22eb1bbc9137e914022b4994ed35591eea0884e9e3e98e6d9895cad6e1d2"
 dependencies = [
- "bitflags 1.3.2",
- "c_vec",
- "lazy_static",
+ "bitflags",
  "libc",
- "sdl2-sys",
+ "sdl3-sys",
 ]
 
 [[package]]
-name = "sdl2-sys"
-version = "0.38.0"
+name = "sdl3-sys"
+version = "0.6.7+SDL-3.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff61407fc75d4b0bbc93dc7e4d6c196439965fbef8e4a4f003a36095823eac0"
+checksum = "e89cde1ff23eb110e348da9b5be904381235163272a424938a2c99c86ea33041"
 dependencies = [
- "cfg-if",
- "libc",
- "version-compare 0.1.1",
+ "pkg-config",
+ "vcpkg",
 ]
 
 [[package]]
@@ -828,7 +813,7 @@ dependencies = [
  "heck",
  "pkg-config",
  "toml",
- "version-compare 0.2.1",
+ "version-compare",
 ]
 
 [[package]]
@@ -994,10 +979,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
-name = "version-compare"
-version = "0.1.1"
+name = "vcpkg"
+version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "579a42fc0b8e0c63b76519a339be31bed574929511fa53c1a3acae26eb258f29"
+checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version-compare"
