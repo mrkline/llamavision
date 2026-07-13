@@ -12,6 +12,19 @@ use std::{f32, f64};
 
 use super::SAMPLE_RATE;
 
+fn to_decibels(v: f32) -> f32 {
+    20.0f32 * f32::log10(v)
+}
+
+fn from_decibels(v: f32) -> f32 {
+    10.0f32.powf(v / 20.0)
+}
+
+// Never let AGC dip below this (perfect silence is -inf).
+// 16-bit audio has about 100 dB of SNR,
+// so don't bother with a bunch of redraws under that.
+static MIN_AGC: LazyLock<f32> = LazyLock::new(|| from_decibels(-100.0));
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct Bounds {
     min: f32,
@@ -22,19 +35,19 @@ impl Bounds {
     fn from_row(vals: &[f32]) -> Option<Self> {
         let mut b: Option<(f32, f32)> = None;
         for v in vals {
-            // Don't scale to silence.
-            if *v == f32::NEG_INFINITY {
+            // Don't  silence.
+            if *v <= 0.0 {
                 continue;
             }
+
             b = match b {
                 None => Some((*v, *v)),
                 Some((min, max)) => Some((min.min(*v), max.max(*v))),
             };
         }
         b.map(|(min, max)| {
-            // 16-bit audio has about 100 dB of SNR,
-            // so don't bother with a bunch of redraws under that.
-            let min = min.max(-100.0);
+            let min = to_decibels(min.max(*MIN_AGC));
+            let max = to_decibels(max);
             Self { min, max }
         })
     }
@@ -344,7 +357,7 @@ fn make_mel_sampler(x: f64, rbw: f64, mels_per_pixel: f64) -> MelSampler {
     // Then using our resolution bandwidth, in samples
     // NB: We skipped over DC, so shift samples down one sample
     let low_sample = (lower_hz / rbw - 1.0).max(0.0);
-    let high_sample = (upper_hz / rbw - 1.0).max(f64:MIN_POSITIVE);
+    let high_sample = (upper_hz / rbw - 1.0).max(f64::MIN_POSITIVE);
     // Consider all the samples we need.
     let floor = low_sample.floor();
     let ceil = high_sample.ceil();
@@ -385,7 +398,8 @@ fn make_mel_sampler(x: f64, rbw: f64, mels_per_pixel: f64) -> MelSampler {
 }
 
 fn normalize(bounds: &Bounds, v: f32) -> f32 {
-    if v < bounds.min {
+    let db = to_decibels(v);
+    if db < bounds.min {
         return 0.0; // (usually -INF)
     }
     // Checked in colorize below:
@@ -397,7 +411,7 @@ fn normalize(bounds: &Bounds, v: f32) -> f32 {
     //     v
     // );
     let range = bounds.max - bounds.min;
-    (v - bounds.min) / range
+    ((db - bounds.min) / range).clamp(0.0, 1.0)
 }
 
 #[repr(packed(1))]
@@ -409,7 +423,6 @@ struct RGB {
 }
 
 fn colorize(v: f32) -> RGB {
-    assert!(v >= 0.0 && v <= 1.0, "not normal: {v}");
     let scaled = v * 255.0;
     let (whole, frac) = (scaled.trunc(), scaled.fract());
     let idx = whole as usize;

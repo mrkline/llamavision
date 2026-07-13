@@ -94,7 +94,7 @@ fn fft(
     let mut normalized = Vec::with_capacity(outs.len() - 1); // Skip DC
     for o in &outs[1..] {
         let normed = o.norm() / normalize_by;
-        normalized.push(20.0 * f32::log10(normed));
+        normalized.push(normed);
     }
     Ok(normalized)
 }
