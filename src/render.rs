@@ -16,14 +16,16 @@ fn to_decibels(v: f32) -> f32 {
     20.0f32 * f32::log10(v)
 }
 
+/*
 fn from_decibels(v: f32) -> f32 {
     10.0f32.powf(v / 20.0)
 }
+*/
 
 // Never let AGC dip below this (perfect silence is -inf).
 // 16-bit audio has about 100 dB of SNR,
 // so don't bother with a bunch of redraws under that.
-static MIN_AGC: LazyLock<f32> = LazyLock::new(|| from_decibels(-100.0));
+const MIN_AGC_DB: f32 = -100.0;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 struct Bounds {
@@ -32,10 +34,10 @@ struct Bounds {
 }
 
 impl Bounds {
-    fn from_row(vals: &[f32]) -> Option<Self> {
+    fn from_row(vals: &[f32], limit_min: bool) -> Option<Self> {
         let mut b: Option<(f32, f32)> = None;
         for v in vals {
-            // Don't  silence.
+            // Don't sample silence.
             if *v <= 0.0 {
                 continue;
             }
@@ -45,10 +47,17 @@ impl Bounds {
                 Some((min, max)) => Some((min.min(*v), max.max(*v))),
             };
         }
-        b.map(|(min, max)| {
-            let min = to_decibels(min.max(*MIN_AGC));
+        b.and_then(|(min, max)| {
+            let mut min = to_decibels(min);
             let max = to_decibels(max);
-            Self { min, max }
+            if limit_min {
+                // The whole row is under the floor; call it silence.
+                if max < MIN_AGC_DB {
+                    return None;
+                }
+                min = min.max(MIN_AGC_DB);
+            }
+            Some(Self { min, max })
         })
     }
     fn expand_to(&self, o: &Self) -> Self {
@@ -133,19 +142,24 @@ pub fn run(
     let mut bounds: Option<Bounds> = None;
     let mut vu_meter = vec![0f32; width].into_boxed_slice();
 
+    let mut limit_min = true;
+    // Event handlers set this when they change bounds behind expand_to()'s back,
+    // since the bounds comparison below won't notice.
+    let mut recolorize = false;
+
     while let Ok(new_row) = rows_rx.recv() {
         span!(Level::DEBUG, "render").in_scope(|| -> Result<()> {
             assert!(rows.len() <= height);
             if rows.len() == height {
                 rows.pop_back();
             }
-            let new_row_bounds = Bounds::from_row(&new_row);
+            let new_row_bounds = Bounds::from_row(&new_row, limit_min);
             rows.push_front(new_row);
 
             // Check dB bounds and possibly renormalize & recolorize
             span!(Level::DEBUG, "norm-colorize").in_scope(|| {
                 // The sound of silence:
-                if new_row_bounds.is_none() {
+                if new_row_bounds.is_none() && !recolorize {
                     pixels.truncate(area - width);
                     for x in 0..width {
                         pixels.push_front(RGB::default());
@@ -153,13 +167,14 @@ pub fn run(
                     }
                     return;
                 }
-                let new_row_bounds = new_row_bounds.unwrap();
 
-                let new_bounds: Option<Bounds> = match bounds {
-                    Some(prev) => Some(prev.expand_to(&new_row_bounds)),
-                    None => Some(new_row_bounds),
+                let new_bounds: Option<Bounds> = match (bounds, new_row_bounds) {
+                    (Some(prev), Some(new_row)) => Some(prev.expand_to(&new_row)),
+                    (prev, None) => prev,
+                    (None, new_row) => new_row,
                 };
-                if bounds != new_bounds {
+                if recolorize || bounds != new_bounds {
+                    recolorize = false;
                     bounds = new_bounds;
                     let new_bounds = new_bounds.expect("new bounds must be something");
                     info!(
@@ -265,6 +280,7 @@ pub fn run(
                     } => {
                         info!("Clearing waterfall");
                         bounds = None;
+                        recolorize = false;
                         pixels.clear();
                         rows.clear();
                     }
@@ -279,11 +295,14 @@ pub fn run(
                                 None => Some(x),
                             }
                         }
-                        bounds = rows
+                        let screen_bounds = rows
                             .iter()
-                            .map(|r| Bounds::from_row(r))
+                            .map(|r| Bounds::from_row(r, limit_min))
                             .flatten()
                             .fold(None, f);
+                        // If the screen is all silence there's nothing to recolor.
+                        recolorize |= screen_bounds.is_some() && screen_bounds != bounds;
+                        bounds = screen_bounds;
                         if let Some(b) = bounds {
                             info!(
                                 "Resetting AGC to screen contents: [{:.2} dB, {:.2} dB]",
@@ -294,7 +313,48 @@ pub fn run(
                         }
                     }
                     Event::KeyDown {
+                        keycode: Some(sdl::keyboard::Keycode::M), // Limit Min
+                        repeat: false,
+                        ..
+                    } => {
+                        let was_limited = limit_min;
+                        limit_min = !limit_min;
+                        if was_limited {
+                            // Expand our boundaries! But just the bottom.
+                            fn f(acc: Option<Bounds>, x: Bounds) -> Option<Bounds> {
+                                match acc {
+                                    Some(prev) => Some(prev.expand_to(&x)),
+                                    None => Some(x),
+                                }
+                            }
+                            let screen_bounds = rows
+                                .iter()
+                                .map(|r| Bounds::from_row(r, limit_min))
+                                .flatten()
+                                .fold(None, f);
+                            if let Some(sb) = screen_bounds {
+                                if let Some(b) = &mut bounds {
+                                    if sb.min < b.min {
+                                        b.min = sb.min;
+                                        recolorize = true;
+                                    }
+                                }
+                            }
+                            info!("Disabling AGC minimum");
+                        }
+                        else {
+                            if let Some(b) = &mut bounds {
+                                if b.min < MIN_AGC_DB {
+                                    b.min = MIN_AGC_DB;
+                                    recolorize = true;
+                                }
+                            }
+                            info!("Limiting AGC minimum to {:.2} dB", MIN_AGC_DB);
+                        }
+                    }
+                    Event::KeyDown {
                         keycode: Some(sdl::keyboard::Keycode::W), // Windowing
+                        repeat: false,
                         ..
                     } => {
                         let prev = apply_window.load(Ordering::Relaxed);
@@ -402,14 +462,6 @@ fn normalize(bounds: &Bounds, v: f32) -> f32 {
     if db < bounds.min {
         return 0.0; // (usually -INF)
     }
-    // Checked in colorize below:
-    // assert!(
-    //     v >= bounds.min && v <= bounds.max,
-    //     "{} {} {}",
-    //     bounds.min,
-    //     bounds.max,
-    //     v
-    // );
     let range = bounds.max - bounds.min;
     ((db - bounds.min) / range).clamp(0.0, 1.0)
 }
