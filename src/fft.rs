@@ -23,6 +23,7 @@ pub fn run(
 ) -> Result<()> {
     let in_width = width * 2;
     let window = blackman_harris(in_width);
+    let window_sum: f32 = window.iter().sum();
     let mut ins = AlignedVec::<f32>::new(in_width);
     let mut outs = AlignedVec::<c32>::new(width + 1);
     let mut plan = R2CPlan32::new(&[in_width], &mut ins, &mut outs, Flag::PATIENT)
@@ -41,7 +42,7 @@ pub fn run(
         };
         audio_rx.read(f);
         while normalized_audio.len() >= in_width {
-            let row = fft(&normalized_audio, &window, &mut plan, &apply_window, &mut ins, &mut outs)?;
+            let row = fft(&normalized_audio, &window, window_sum, &mut plan, &apply_window, &mut ins, &mut outs)?;
             assert_eq!(row.len(), width);
             rows_tx.send(row)?;
             // Shave in_width off
@@ -73,12 +74,14 @@ fn blackman_harris(width: usize) -> Vec<f32> {
 fn fft(
     normalized_audio: &VecDeque<f32>,
     window: &[f32],
+    window_sum: f32,
     plan: &mut R2CPlan32,
     apply_window: &AtomicBool,
     ins: &mut AlignedVec<f32>,
     outs: &mut AlignedVec<c32>,
 ) -> Result<Vec<f32>> {
-    if apply_window.load(Ordering::Relaxed) {
+    let windowed = apply_window.load(Ordering::Relaxed);
+    if windowed {
         for (n, i_n) in ins.iter_mut().enumerate() {
             *i_n = window[n] * normalized_audio[n];
         }
@@ -89,12 +92,17 @@ fn fft(
     }
 
     plan.r2c(ins, outs).context("fft failed")?;
-    // Get magnitude and normalize.
-    let normalize_by = ins.len() as f32; // sqrt this?
+    // One-sided amplitude spectrum, compensating the window's coherent gain Σw
+    // so a full-scale sine reads 1.0 with or without the window.
+    // (Rectangular window: Σw = N.)
+    let coherent_gain = if windowed { window_sum } else { ins.len() as f32 };
     let mut normalized = Vec::with_capacity(outs.len() - 1); // Skip DC
-    for o in &outs[1..] {
-        let normed = o.norm() / normalize_by;
+    // Interior bins get 2x to fold in their (discarded) mirror image...
+    for o in &outs[1..outs.len() - 1] {
+        let normed = o.norm() / (coherent_gain / 2.0);
         normalized.push(normed);
     }
+    // ...but Nyquist is its own mirror; doubling it would overstate it by 6 dB.
+    normalized.push(outs[outs.len() - 1].norm() / coherent_gain);
     Ok(normalized)
 }
